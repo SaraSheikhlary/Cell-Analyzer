@@ -10,6 +10,7 @@ Features
 - Upload your own cell images (PNG, JPG, TIFF, etc.)
 - Or instantly load a synthetic demo image containing a realistic mix of
   "healthy" and "abnormal" cells (generated on the fly)
+- **Quadrant Pre-Selection:** Divide image into NW, NE, SW, SE for targeted analysis.
 - Side-by-side view: original image vs color-coded segmentation overlay
   (teal = cell boundaries, magenta = nuclei)
 - Interactive data table with all extracted metrics per cell
@@ -22,12 +23,6 @@ Features
 - Adjustable analysis parameters (sidebar)
 - One-click CSV download of the full metrics table
 - Summary statistics and malignancy-risk indicators
-
-When no image is provided, the synthetic demo allows immediate exploration
-without requiring any external data.
-
-Run:
-    streamlit run app.py
 """
 
 from __future__ import annotations
@@ -35,6 +30,7 @@ from __future__ import annotations
 import io
 from typing import Optional
 
+import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -87,6 +83,30 @@ def fig_to_st(fig: plt.Figure):
     st.pyplot(fig, use_container_width=True, clear_figure=True)
 
 
+def draw_quadrant_grid(img_array: np.ndarray) -> np.ndarray:
+    """Draws a target grid with NW, NE, SW, SE labels for visual selection."""
+    vis = img_array.copy()
+    h, w = vis.shape[:2]
+    
+    # Draw crosshairs
+    color = (255, 215, 0) # Gold/Yellow
+    thickness = 2
+    cv2.line(vis, (w//2, 0), (w//2, h), color, thickness)
+    cv2.line(vis, (0, h//2), (w, h//2), color, thickness)
+    
+    # Add text with dark outline for readability on any background
+    def put_text(text, x, y):
+        cv2.putText(vis, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 4)
+        cv2.putText(vis, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+        
+    put_text("NW", int(w*0.25) - 20, int(h*0.25))
+    put_text("NE", int(w*0.75) - 20, int(h*0.25))
+    put_text("SW", int(w*0.25) - 20, int(h*0.75))
+    put_text("SE", int(w*0.75) - 20, int(h*0.75))
+    
+    return vis
+
+
 # ----------------------------- Sidebar Controls ------------------------------
 st.sidebar.title("🔬 Cell Morphometry")
 st.sidebar.markdown("**Malignant vs Normal Feature Extraction**")
@@ -133,41 +153,20 @@ st.sidebar.markdown("---")
 if st.sidebar.button("Reset to defaults", use_container_width=True):
     st.rerun()
 
+
 # ----------------------------- Main Title & Intro ---------------------------
 st.title("Cell Morphometry Analyzer")
-st.caption("Quantitative extraction of cell & nuclear shape features with explainable abnormal morphology flagging")
-
-with st.expander("How it works & What the metrics mean", expanded=False):
-    st.markdown(
-        """
-        **Pipeline**
-        1. Image is converted to grayscale and (if needed) inverted so that cells/nuclei appear dark.
-        2. Global Otsu thresholding + morphological cleaning segments individual **cells**.
-        3. Inside each cell, the darkest pixels (user-controlled percentile) are labeled as **nucleus**.
-        4. For every cell we compute the requested morphometric features.
-        5. A transparent rule-based classifier flags cells as *Normal*, *Borderline*, or *Abnormal (malignant-like)*.
-
-        **Key Metrics**
-        - **N/C ratio** — Nucleus area ÷ Cytoplasm area. Elevated values are a classic cytological sign of malignancy.
-        - **Valorization %** — Computes the variance of internal granular/vacuole structures inside the cell.
-        - **Circularity** — 4π × Area / Perimeter² (1.0 = perfect circle). Lower values indicate irregularity.
-        - **Eccentricity** — 0 (circle) to 1 (very elongated). High values suggest atypical nuclear or cell shape.
-        - **Perimeter** — Boundary length of the cell (pixels).
-
-        The classifier is deliberately simple and fully explainable (no black-box ML). It triggers on combinations of high N/C, low circularity, high eccentricity, and enlarged nuclei.
-        """
-    )
+st.caption("Quantitative extraction of cell & nuclear shape features with targeted region analysis.")
 
 # ----------------------------- Image Source ----------------------------------
 uploaded_file = st.file_uploader(
     "Upload a cell image (PNG, JPG, TIFF, etc.)",
     type=["png", "jpg", "jpeg", "tif", "tiff", "bmp"],
     accept_multiple_files=False,
-    help="For best results use images with clear cell/nuclear contrast (H&E, Wright-Giemsa, fluorescence, etc.).",
 )
 
 use_synthetic = False
-image: Optional[np.ndarray] = None
+raw_image: Optional[np.ndarray] = None
 source_label = ""
 
 col_a, col_b = st.columns([1, 1])
@@ -178,23 +177,58 @@ with col_a:
 
 with col_b:
     if uploaded_file is None and not use_synthetic:
-        st.info("Upload an image above, or click the button to load a ready-to-analyze synthetic demo image.",
-                icon="ℹ️")
+        st.info("Upload an image above, or load the synthetic demo.", icon="ℹ️")
 
-# Load image (priority: uploaded > synthetic button)
+# Load image
 if uploaded_file is not None:
-    image = load_image(uploaded_file)
+    raw_image = load_image(uploaded_file)
     source_label = f"Uploaded: {uploaded_file.name}"
 elif use_synthetic:
     with st.spinner("Generating realistic synthetic cell image..."):
-        image = generate_synthetic_cell_image(width=680, height=520, n_healthy=6, n_abnormal=4, seed=42)
-    source_label = "Synthetic demo image (generated on-the-fly)"
+        raw_image = generate_synthetic_cell_image(width=800, height=600, n_healthy=10, n_abnormal=6, seed=42)
+    source_label = "Synthetic demo image"
 
-# ----------------------------- Run Analysis ----------------------------------
-if image is not None:
+# ----------------------------- Run Workflow ----------------------------------
+if raw_image is not None:
     st.markdown(f"**Source:** {source_label}")
+    st.markdown("---")
+    
+    # --- Step 1: Quadrant Selection ---
+    st.subheader("1. Quadrant Pre-Selection")
+    
+    q_col1, q_col2 = st.columns([1.5, 1])
+    
+    with q_col1:
+        grid_overlay = draw_quadrant_grid(raw_image)
+        st.image(grid_overlay, use_column_width=True, clamp=True, caption="Full Image Overview")
+        
+    with q_col2:
+        st.markdown("**Select a region to analyze:**")
+        quad_choice = st.radio(
+            "Region",
+            ["Full Image (Default)", "NW (Top-Left)", "NE (Top-Right)", "SW (Bottom-Left)", "SE (Bottom-Right)"],
+            label_visibility="collapsed"
+        )
+        
+        # Perform the actual crop based on selection
+        h, w = raw_image.shape[:2]
+        working_image = raw_image.copy()
+        
+        if quad_choice == "NW (Top-Left)":
+            working_image = raw_image[0:h//2, 0:w//2]
+        elif quad_choice == "NE (Top-Right)":
+            working_image = raw_image[0:h//2, w//2:w]
+        elif quad_choice == "SW (Bottom-Left)":
+            working_image = raw_image[h//2:h, 0:w//2]
+        elif quad_choice == "SE (Bottom-Right)":
+            working_image = raw_image[h//2:h, w//2:w]
+            
+        st.success(f"Target locked: **{quad_choice}**")
+        st.caption(f"Resolution of selected area: {working_image.shape[1]}x{working_image.shape[0]} px")
 
-    # Build parameter dict from sidebar
+    st.markdown("---")
+    
+    # --- Step 2: Analysis ---
     params_dict = {
         "min_cell_area": min_cell_area,
         "nucleus_dark_percentile": float(nucleus_percentile),
@@ -202,15 +236,14 @@ if image is not None:
         "nc_ratio_very_high": float(nc_very_high),
     }
 
-    # Run (cached)
-    results = run_analysis(image, params_dict)
+    results = run_analysis(working_image, params_dict)
 
     cells = results["cells"]
     summary = results["summary"]
 
-    # ====================== SUMMARY METRICS ======================
-    st.subheader("Summary")
+    st.subheader(f"2. Analysis Results ({quad_choice})")
 
+    # ====================== SUMMARY METRICS ======================
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Cells detected", summary["num_cells"])
     m2.metric("Flagged abnormal", f"{summary['num_abnormal']} ({summary['abnormal_pct']}%)")
@@ -221,13 +254,11 @@ if image is not None:
         st.caption("ℹ️ Image was automatically inverted for analysis (bright objects on dark background detected).")
 
     # ====================== SIDE-BY-SIDE IMAGES ======================
-    st.subheader("Visualization")
-
     img_col1, img_col2 = st.columns(2, gap="medium")
 
     with img_col1:
-        st.markdown("**Original Image**")
-        st.image(image, use_column_width=True, clamp=True)
+        st.markdown(f"**Target Area ({quad_choice})**")
+        st.image(working_image, use_column_width=True, clamp=True)
 
     with img_col2:
         st.markdown("**Segmented Overlay**")
@@ -244,7 +275,6 @@ if image is not None:
     if cells:
         df = pd.DataFrame(cells)
 
-        # Reorder & pretty column names for display
         display_df = df[
             [
                 "cell_id",
@@ -259,7 +289,7 @@ if image is not None:
                 "classification",
             ]
         ].copy()
-
+        
         display_df.columns = [
             "Cell ID",
             "Cell Area",
@@ -273,8 +303,6 @@ if image is not None:
             "Classification",
         ]
 
-
-        # Color the classification column
         def color_class(val: str):
             if "Abnormal" in val:
                 return "background-color: #ffcccc; font-weight: 600"
@@ -282,59 +310,48 @@ if image is not None:
                 return "background-color: #fff3cd; font-weight: 500"
             return "background-color: #d4edda"
 
-
-        # FIXED: applymap is deprecated in Pandas >=2.1.0. Replaced with map.
         styled = display_df.style.map(color_class, subset=["Classification"])
         st.dataframe(styled, use_container_width=True, hide_index=True, height=320)
 
-        # CSV download
         csv_buffer = io.StringIO()
         df.to_csv(csv_buffer, index=False)
         st.download_button(
             label="⬇️ Download metrics as CSV",
             data=csv_buffer.getvalue(),
-            file_name="cell_morphometry_metrics.csv",
+            file_name=f"cell_metrics_{quad_choice.replace(' ', '_')}.csv",
             mime="text/csv",
-            use_container_width=False,
         )
 
         # ====================== SINGLE PLATELET ZOOM & ANALYZE ======================
         st.markdown("---")
-        st.subheader("🔍 Single Platelet Inspection (Zoom & Valorization)")
-        st.markdown(
-            "Select a specific platelet from the TEM image to zoom in and calculate internal structural percentages.")
+        st.subheader("🔍 Single Platelet Inspection")
 
         if cells:
-            # Create a dropdown to select a specific cell ID
             cell_ids = [c["cell_id"] for c in cells]
             selected_id = st.selectbox("Select Platelet (Cell ID)", options=cell_ids)
-
-            # Find the data for the selected cell
+            
             selected_cell = next(c for c in cells if c["cell_id"] == selected_id)
             minr, minc, maxr, maxc = selected_cell["bbox"]
-
-            # Add a 15-pixel padding box around the platelet so it's not cropped too tightly
+            
             pad = 15
             minr_p = max(0, minr - pad)
             minc_p = max(0, minc - pad)
-            maxr_p = min(image.shape[0], maxr + pad)
-            maxc_p = min(image.shape[1], maxc + pad)
+            maxr_p = min(working_image.shape[0], maxr + pad)
+            maxc_p = min(working_image.shape[1], maxc + pad)
 
-            # Crop the original image and the segmented overlay
-            zoom_img = image[minr_p:maxr_p, minc_p:maxc_p]
+            zoom_img = working_image[minr_p:maxr_p, minc_p:maxc_p]
             zoom_overlay = results["overlay"][minr_p:maxr_p, minc_p:maxc_p]
 
-            # Display the zoomed interface
             z_col1, z_col2, z_col3 = st.columns([1.5, 1.5, 1])
-
+            
             with z_col1:
                 st.markdown(f"**Zoomed Platelet (ID: {selected_id})**")
                 st.image(zoom_img, use_column_width=True, clamp=True)
-
+                
             with z_col2:
                 st.markdown("**Segmented Overlay**")
                 st.image(zoom_overlay, use_column_width=True, clamp=True)
-
+                
             with z_col3:
                 st.markdown("**Specific Metrics**")
                 st.metric("Valorization / Vacuolization", f"{selected_cell['valorization_pct']}%")
@@ -347,7 +364,6 @@ if image is not None:
 
         chart_col1, chart_col2 = st.columns(2, gap="large")
 
-        # --- Chart 1: N/C Ratio Histogram ---
         with chart_col1:
             st.markdown("**N/C Ratio Distribution**")
             fig1, ax1 = plt.subplots(figsize=(6, 3.8))
@@ -363,9 +379,8 @@ if image is not None:
             ax1.grid(True, alpha=0.3)
             fig_to_st(fig1)
 
-        # --- Chart 2: N/C vs Eccentricity scatter ---
         with chart_col2:
-            st.markdown("**N/C Ratio vs Eccentricity (by classification)**")
+            st.markdown("**N/C Ratio vs Eccentricity**")
             fig2, ax2 = plt.subplots(figsize=(6, 3.8))
 
             colors = {"Normal morphology": "#2ecc71", "Borderline": "#f1c40f", "Abnormal (malignant-like)": "#e74c3c"}
@@ -390,81 +405,9 @@ if image is not None:
             ax2.grid(True, alpha=0.3)
             fig_to_st(fig2)
 
-        # --- Chart 3: Circularity by classification (box + swarm) ---
-        st.markdown("**Circularity by Classification** (higher = more round)")
-        fig3, ax3 = plt.subplots(figsize=(9, 3.6))
-
-        classes_order = ["Normal morphology", "Borderline", "Abnormal (malignant-like)"]
-        data_for_box = [df[df["classification"] == c]["circularity"].values for c in classes_order if
-                        c in df["classification"].values]
-
-        bp = ax3.boxplot(
-            data_for_box,
-            positions=[0, 1, 2][: len(data_for_box)],
-            widths=0.55,
-            patch_artist=True,
-            showfliers=True,
-        )
-
-        palette = ["#2ecc71", "#f1c40f", "#e74c3c"]
-        for patch, color in zip(bp["boxes"], palette[: len(data_for_box)]):
-            patch.set_facecolor(color)
-            patch.set_alpha(0.35)
-
-        # overlay individual points
-        for i, c in enumerate(classes_order):
-            if c in df["classification"].values:
-                vals = df[df["classification"] == c]["circularity"].values
-                x = np.random.normal(i, 0.08, size=len(vals))
-                ax3.scatter(x, vals, c=palette[i], s=22, alpha=0.7, edgecolors="white", linewidths=0.3)
-
-        ax3.set_xticks(range(len(data_for_box)))
-        ax3.set_xticklabels([c for c in classes_order if c in df["classification"].values])
-        ax3.set_ylabel("Circularity (4πA/P²)")
-        ax3.set_ylim(0, 1.05)
-        ax3.axhline(0.6, color="#7f8c8d", linestyle=":", alpha=0.6, lw=1)
-        ax3.grid(True, axis="y", alpha=0.3)
-        fig_to_st(fig3)
-
     else:
-        st.warning(
-            "No cells were detected with the current parameters. Try lowering the minimum cell area or adjusting the nucleus darkness percentile.")
-
-    # ====================== CLASSIFIER EXPLANATION ======================
-    with st.expander("About the lightweight classifier (fully explainable)"):
-        st.markdown(
-            f"""
-            The classifier uses simple, transparent rules (no neural nets or black boxes):
-
-            - **Abnormal (malignant-like)** if ≥2 of the following are true **or** N/C ratio ≥ {nc_very_high}:
-              - N/C ratio ≥ {nc_abnormal}
-              - Eccentricity ≥ 0.74 (elongated / irregular)
-              - Circularity ≤ 0.58 (atypical shape)
-              - Nucleus area ≥ 520 px (enlarged nucleus)
-
-            - **Borderline** if exactly one of the above criteria is met.
-            - Otherwise **Normal morphology**.
-
-            This mirrors classic cytopathology criteria (high nuclear-to-cytoplasmic ratio, nuclear pleomorphism, etc.) and is intended as a fast, reproducible screening aid or fallback when ML models are unavailable.
-            """
-        )
+        st.warning(f"No cells were detected in the {quad_choice} region. Try adjusting parameters or selecting a different quadrant.")
 
 else:
-    # No image loaded yet
     st.markdown("---")
-    st.markdown(
-        """
-        ### Ready to explore?
-
-        1. Click **"Load synthetic demo"** above to see the full pipeline in action immediately.
-        2. Or upload your own microscopy image (H&E, Pap stain, fluorescence, etc.).
-
-        The synthetic demo contains a realistic mixture of round, low-N/C "healthy" cells and larger, elongated, high-N/C "abnormal" cells. All metrics and classifications are produced by the exact same algorithm used on real uploads.
-        """
-    )
-
-# ----------------------------- Footer ----------------------------------------
-st.markdown("---")
-st.caption(
-    "Built with NumPy + OpenCV + scikit-image  •  Rule-based classifier  •  Fully reproducible synthetic data generator"
-)
+    st.markdown("Upload an image to begin quadrant targeting and analysis.")
