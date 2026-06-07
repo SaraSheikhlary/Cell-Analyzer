@@ -14,6 +14,7 @@ Core capabilities:
     * Circularity (4πA/P²)
     * Eccentricity (from second moments)
     * Nucleus-to-cytoplasm (N/C) area ratio
+    * Valorization/Vacuolization percentage (internal structure variance)
 - Lightweight, fully explainable rule-based classifier for "normal" vs "abnormal"
   morphology (no machine learning required as fallback).
 
@@ -241,7 +242,6 @@ def segment_and_analyze(
         eccentricity = float(creg.eccentricity)
 
         # Find nuclei whose centroid lies inside this cell
-        # (simple and robust; alternatively could use mask overlap)
         minr, minc, maxr, maxc = creg.bbox
         cell_bbox_mask = labeled_cells[minr:maxr, minc:maxc] == creg.label
 
@@ -265,6 +265,16 @@ def segment_and_analyze(
         cytoplasm_area = max(cell_area - nucleus_area, 1.0)
         nc_ratio = nucleus_area / cytoplasm_area
 
+        # --- NEW: Calculate % of Valorization/Vacuolization ---
+        # We calculate the variance/spread of pixels inside the cell to quantify internal structures
+        cell_pixels = gray[minr:maxr, minc:maxc][cell_bbox_mask]
+        if len(cell_pixels) > 0:
+            median_val = np.median(cell_pixels)
+            valorization_pixels = np.sum(np.abs(cell_pixels - median_val) > 0.15) 
+            valorization_pct = (valorization_pixels / cell_area) * 100.0
+        else:
+            valorization_pct = 0.0
+
         # Classification
         classification, reasons = _classify_morphology(
             nc_ratio=nc_ratio,
@@ -285,6 +295,8 @@ def segment_and_analyze(
                 "perimeter": round(perimeter, 1),
                 "circularity": round(circularity, 3),
                 "eccentricity": round(eccentricity, 3),
+                "valorization_pct": round(valorization_pct, 1), # NEW METRIC
+                "bbox": (minr, minc, maxr, maxc), # NEW: Bounding box for zooming
                 "classification": classification,
                 "reasons": reasons,
             }
@@ -405,13 +417,6 @@ def generate_synthetic_cell_image(
     """
     Generate a realistic-looking synthetic RGB image containing a mixture of
     "healthy" and "abnormal/malignant-like" cells.
-
-    Healthy cells:     smaller, rounder, low N/C ratio (~0.25-0.38)
-    Abnormal cells:    larger, more eccentric or irregular, high N/C ratio (>0.6)
-
-    The image is intentionally a bit noisy and blurred to simulate real
-    microscope conditions. The analyzer pipeline will be run on this image
-    in demo mode, so the extracted metrics reflect real algorithm output.
     """
     rng = np.random.default_rng(seed)
     img = np.full((height, width, 3), 248, dtype=np.uint8)  # very light background
@@ -440,95 +445,32 @@ def generate_synthetic_cell_image(
         n_cx = cx + rng.uniform(-rx * 0.08, rx * 0.08)
         n_ry = max(3, nucleus_ry)
         n_rx = max(3, nucleus_rx)
-        rr_n, cc_n = draw.ellipse(int(n_cy), int(n_cx), int(n_ry), int(n_rx),
-                                  rotation=np.deg2rad(angle_deg + rng.uniform(-18, 18)),
-                                  shape=img.shape[:2])
+        rr_n, cc_n = draw.ellipse(int(n_cy), int(n_cx), int(n_ry), int(n_rx), rotation=np.deg2rad(angle_deg), shape=img.shape[:2])
         for i in range(3):
             img[rr_n, cc_n, i] = np.clip(
                 nucleus_color[i] + rng.integers(-8, 9, size=len(rr_n)), 0, 255
             )
 
-    # Color palette (subtle, microscopy-like)
-    healthy_cyto = (225, 218, 205)
-    healthy_nuc = (95, 70, 85)
-
-    abnormal_cyto = (235, 205, 195)
-    abnormal_nuc = (55, 40, 55)
-
-    # Place healthy cells (rounder, smaller, lower NC)
+    # Draw cells
     for _ in range(n_healthy):
-        for attempt in range(12):  # simple non-overlap attempt
-            cy = rng.uniform(60, height - 60)
-            cx = rng.uniform(60, width - 60)
-            ry = rng.uniform(28, 42)
-            rx = ry * rng.uniform(0.88, 1.12)  # nearly round
-            angle = rng.uniform(0, 180)
+        cy, cx = rng.uniform(40, height - 40), rng.uniform(40, width - 40)
+        ry, rx = rng.uniform(15, 25), rng.uniform(15, 25)
+        draw_cell(
+            cy, cx, ry, rx, rng.uniform(0, 360), (180, 190, 220),
+            ry * rng.uniform(0.3, 0.45), rx * rng.uniform(0.3, 0.45), (80, 70, 130)
+        )
 
-            # Check rough separation from existing content
-            test_mask = np.zeros((height, width), dtype=bool)
-            tr, tc = draw.ellipse(int(cy), int(cx), int(ry + 6), int(rx + 6),
-                                  rotation=np.deg2rad(angle), shape=test_mask.shape)
-            if img[tr, tc].mean() > 235:  # mostly background
-                nucleus_ry = ry * rng.uniform(0.32, 0.41)
-                nucleus_rx = nucleus_ry * rng.uniform(0.9, 1.1)
-                draw_cell(cy, cx, ry, rx, angle, healthy_cyto, nucleus_ry, nucleus_rx, healthy_nuc)
-                break
-
-    # Place abnormal cells (more eccentric, higher NC)
     for _ in range(n_abnormal):
-        for attempt in range(15):
-            cy = rng.uniform(70, height - 70)
-            cx = rng.uniform(70, width - 70)
-            ry = rng.uniform(38, 58)
-            rx = ry * rng.uniform(0.55, 0.82)  # clearly elongated
-            angle = rng.uniform(0, 180)
+        cy, cx = rng.uniform(50, height - 50), rng.uniform(50, width - 50)
+        ry, rx = rng.uniform(25, 40), rng.uniform(12, 20)  # elongated
+        draw_cell(
+            cy, cx, ry, rx, rng.uniform(0, 360), (160, 170, 200),
+            ry * rng.uniform(0.7, 0.9), rx * rng.uniform(0.7, 0.9), (60, 40, 100) # large nuclei
+        )
 
-            test_mask = np.zeros((height, width), dtype=bool)
-            tr, tc = draw.ellipse(int(cy), int(cx), int(ry + 5), int(rx + 5),
-                                  rotation=np.deg2rad(angle), shape=test_mask.shape)
-            if img[tr, tc].mean() > 232:
-                nucleus_ry = ry * rng.uniform(0.58, 0.72)  # high N/C
-                nucleus_rx = nucleus_ry * rng.uniform(0.6, 0.85)
-                draw_cell(cy, cx, ry, rx, angle, abnormal_cyto, nucleus_ry, nucleus_rx, abnormal_nuc)
-                break
-
-    # Add realistic microscope-like texture + slight blur
-    noise = rng.normal(0, 6, img.shape).astype(np.int16)
-    img = np.clip(img.astype(np.int16) + noise, 0, 255).astype(np.uint8)
-
-    # Light blur to simulate optical blur / slight defocus
-    img = cv2.GaussianBlur(img, (3, 3), 0.6)
-
-    # Very mild vignette for aesthetics
-    yy, xx = np.mgrid[:height, :width]
-    dist = np.sqrt((yy - height / 2) ** 2 + (xx - width / 2) ** 2)
-    vignette = 1 - (dist / dist.max() * 0.12)
-    img = (img * vignette[..., np.newaxis]).astype(np.uint8)
-
-    return img
-
-
-# ----------------------------- Convenience -----------------------------------
-def get_default_params() -> AnalysisParams:
-    """Return a fresh default parameter set (useful for UI sliders)."""
-    return AnalysisParams()
-
-
-if __name__ == "__main__":
-    # Quick self-test when run directly
-    print("Generating synthetic demo image...")
-    synth = generate_synthetic_cell_image(seed=42)
-    print(f"Synthetic image shape: {synth.shape}")
-
-    print("Running analysis pipeline...")
-    result = segment_and_analyze(synth)
-
-    print(f"Detected {result['summary']['num_cells']} cells")
-    print(f"Abnormal flagged: {result['summary']['num_abnormal']} "
-          f"({result['summary']['abnormal_pct']}%)")
-    print(f"Mean N/C ratio: {result['summary']['mean_nc_ratio']}")
-
-    for c in result["cells"][:3]:
-        print(f"  Cell {c['cell_id']}: N/C={c['nc_ratio']}, {c['classification']}")
-
-    print("\nanalyzer.py self-test passed.")
+    # Add Gaussian blur and noise
+    img_float = img.astype(np.float32) / 255.0
+    img_float = filters.gaussian(img_float, sigma=0.8, channel_axis=-1)
+    img_float = util.random_noise(img_float, mode="gaussian", var=0.001, rng=rng)
+    
+    return (np.clip(img_float, 0, 1) * 255).astype(np.uint8)
