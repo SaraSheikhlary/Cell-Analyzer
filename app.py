@@ -14,6 +14,7 @@ Features
   (teal = cell boundaries, magenta = nuclei)
 - Interactive data table with all extracted metrics per cell
 - Explainable rule-based classifier output ("Normal", "Borderline", "Abnormal")
+- Single Platelet Zoom inspection to isolate internal structures (Valorization)
 - Multiple interactive charts:
     • N/C ratio distribution
     • N/C ratio vs Eccentricity scatter (colored by classification)
@@ -144,11 +145,12 @@ with st.expander("How it works & What the metrics mean", expanded=False):
         1. Image is converted to grayscale and (if needed) inverted so that cells/nuclei appear dark.
         2. Global Otsu thresholding + morphological cleaning segments individual **cells**.
         3. Inside each cell, the darkest pixels (user-controlled percentile) are labeled as **nucleus**.
-        4. For every cell we compute the six requested morphometric features.
+        4. For every cell we compute the requested morphometric features.
         5. A transparent rule-based classifier flags cells as *Normal*, *Borderline*, or *Abnormal (malignant-like)*.
 
         **Key Metrics**
         - **N/C ratio** — Nucleus area ÷ Cytoplasm area. Elevated values are a classic cytological sign of malignancy.
+        - **Valorization %** — Computes the variance of internal granular/vacuole structures inside the cell.
         - **Circularity** — 4π × Area / Perimeter² (1.0 = perfect circle). Lower values indicate irregularity.
         - **Eccentricity** — 0 (circle) to 1 (very elongated). High values suggest atypical nuclear or cell shape.
         - **Perimeter** — Boundary length of the cell (pixels).
@@ -234,7 +236,7 @@ if image is not None:
             results["overlay"],
             use_column_width=True,
             clamp=True,
-            caption="Teal = cell boundaries | Magenta = nuclei",
+            caption="Teal = cell boundaries | Magenta = nuclei",
         )
 
     # ====================== DATA TABLE ======================
@@ -251,18 +253,21 @@ if image is not None:
                 "nucleus_area",
                 "cytoplasm_area",
                 "nc_ratio",
+                "valorization_pct",
                 "perimeter",
                 "circularity",
                 "eccentricity",
                 "classification",
             ]
         ].copy()
+        
         display_df.columns = [
             "Cell ID",
             "Cell Area",
             "Nucleus Area",
             "Cytoplasm Area",
             "N/C Ratio",
+            "Valorization %",
             "Perimeter",
             "Circularity",
             "Eccentricity",
@@ -291,7 +296,50 @@ if image is not None:
             use_container_width=False,
         )
 
+        # ====================== SINGLE PLATELET ZOOM & ANALYZE ======================
+        st.markdown("---")
+        st.subheader("🔍 Single Platelet Inspection (Zoom & Valorization)")
+        st.markdown("Select a specific platelet from the TEM image to zoom in and calculate internal structural percentages.")
+
+        if cells:
+            # Create a dropdown to select a specific cell ID
+            cell_ids = [c["cell_id"] for c in cells]
+            selected_id = st.selectbox("Select Platelet (Cell ID)", options=cell_ids)
+            
+            # Find the data for the selected cell
+            selected_cell = next(c for c in cells if c["cell_id"] == selected_id)
+            minr, minc, maxr, maxc = selected_cell["bbox"]
+            
+            # Add a 15-pixel padding box around the platelet so it's not cropped too tightly
+            pad = 15
+            minr_p = max(0, minr - pad)
+            minc_p = max(0, minc - pad)
+            maxr_p = min(image.shape[0], maxr + pad)
+            maxc_p = min(image.shape[1], maxc + pad)
+
+            # Crop the original image and the segmented overlay
+            zoom_img = image[minr_p:maxr_p, minc_p:maxc_p]
+            zoom_overlay = results["overlay"][minr_p:maxr_p, minc_p:maxc_p]
+
+            # Display the zoomed interface
+            z_col1, z_col2, z_col3 = st.columns([1.5, 1.5, 1])
+            
+            with z_col1:
+                st.markdown(f"**Zoomed Platelet (ID: {selected_id})**")
+                st.image(zoom_img, use_column_width=True, clamp=True)
+                
+            with z_col2:
+                st.markdown("**Segmented Overlay**")
+                st.image(zoom_overlay, use_column_width=True, clamp=True)
+                
+            with z_col3:
+                st.markdown("**Specific Metrics**")
+                st.metric("Valorization / Vacuolization", f"{selected_cell['valorization_pct']}%")
+                st.metric("Total Area (pixels)", f"{selected_cell['cell_area']}")
+                st.metric("Circularity", f"{selected_cell['circularity']}")
+
         # ====================== CHARTS ======================
+        st.markdown("---")
         st.subheader("Interactive Feature Charts")
 
         chart_col1, chart_col2 = st.columns(2, gap="large")
