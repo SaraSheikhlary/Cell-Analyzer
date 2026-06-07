@@ -282,7 +282,8 @@ if image is not None:
                 return "background-color: #fff3cd; font-weight: 500"
             return "background-color: #d4edda"
 
-        styled = display_df.style.applymap(color_class, subset=["Classification"])
+        # FIXED: applymap is deprecated in Pandas >=2.1.0. Replaced with map.
+        styled = display_df.style.map(color_class, subset=["Classification"])
         st.dataframe(styled, use_container_width=True, hide_index=True, height=320)
 
         # CSV download
