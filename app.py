@@ -15,14 +15,11 @@ Features
   (teal = cell boundaries, magenta = nuclei, with overlay numbers)
 - Interactive data table with all extracted metrics per cell
 - Explainable rule-based classifier output ("Normal", "Borderline", "Abnormal")
-- Single Platelet Zoom inspection to isolate internal structures (Valorization)
-- Multiple interactive charts:
-    • N/C ratio distribution
-    • N/C ratio vs Eccentricity scatter (colored by classification)
-    • Circularity comparison
+- Custom Group Analysis for multi-platelet vacuolization and physical size ranges
+- Single Platelet Zoom inspection to isolate internal structures
+- Multiple interactive charts
 - Adjustable analysis parameters (sidebar)
 - One-click CSV download of the full metrics table
-- Summary statistics and malignancy-risk indicators
 """
 
 from __future__ import annotations
@@ -149,6 +146,18 @@ nc_very_high = st.sidebar.slider(
     step=0.01,
 )
 
+# --- NEW: Physical Scale Input ---
+st.sidebar.markdown("---")
+st.sidebar.header("Microscopy Scale")
+px_per_um = st.sidebar.number_input(
+    "Pixels per micrometer (px/µm)",
+    min_value=0.1,
+    max_value=5000.0,
+    value=1.0,  # Default 1.0 means pixels = micrometers if unknown
+    step=1.0,
+    help="Enter the scale from your TEM image to calculate actual sizes. E.g., if a 5µm scale bar is 500 pixels, enter 100."
+)
+
 st.sidebar.markdown("---")
 if st.sidebar.button("Reset to defaults", use_container_width=True):
     st.rerun()
@@ -260,7 +269,7 @@ if raw_image is not None:
     # ====================== SUMMARY METRICS ======================
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Cells detected", summary["num_cells"])
-    m2.metric("Flagged abnormal", f"{summary['num_abnormal']} ({summary['abnormal_pct']}%)")
+    m2.metric("Flagged abnormal", f"{summary.get('num_abnormal', 0)} ({summary.get('abnormal_pct', 0.0)}%)")
     m3.metric("Mean N/C ratio", summary["mean_nc_ratio"])
     m4.metric("Max N/C ratio", summary["max_nc_ratio"])
 
@@ -304,19 +313,22 @@ if raw_image is not None:
             ]
         ].copy()
 
+        # Add physical area calculation based on user input scale
+        display_df.insert(2, "cell_area_um2", display_df["cell_area"] / (px_per_um ** 2))
+
         display_df.columns = [
             "Cell ID",
-            "Cell Area",
+            "Area (px)",
+            "Area (µm²)",
             "Nucleus Area",
             "Cytoplasm Area",
             "N/C Ratio",
-            "vacuolization %",
+            "Vacuolization %",
             "Perimeter",
             "Circularity",
             "Eccentricity",
             "Classification",
         ]
-
 
         def color_class(val: str):
             if "Abnormal" in val:
@@ -325,12 +337,11 @@ if raw_image is not None:
                 return "background-color: #fff3cd; font-weight: 500"
             return "background-color: #d4edda"
 
-
         styled = display_df.style.map(color_class, subset=["Classification"])
         st.dataframe(styled, use_container_width=True, hide_index=True, height=320)
 
         csv_buffer = io.StringIO()
-        df.to_csv(csv_buffer, index=False)
+        display_df.to_csv(csv_buffer, index=False)
         st.download_button(
             label="⬇️ Download metrics as CSV",
             data=csv_buffer.getvalue(),
@@ -338,13 +349,38 @@ if raw_image is not None:
             mime="text/csv",
         )
 
+        # ====================== CUSTOM GROUP ANALYSIS ======================
+        st.markdown("---")
+        st.subheader("🧮 Custom Group Analysis")
+        st.markdown("Select multiple platelets to calculate their combined aggregate vacuolization and view their exact physical size range.")
+
+        cell_ids = [c["cell_id"] for c in cells]
+        selected_group = st.multiselect("Select Platelets (Cell IDs) from current quadrant:", options=cell_ids)
+
+        if selected_group:
+            group_cells = [c for c in cells if c["cell_id"] in selected_group]
+
+            # Reconstruct aggregate vacuolization: (Sum of vacuole area) / (Sum of cell area)
+            total_area_px = sum(c["cell_area"] for c in group_cells)
+            total_vac_area_px = sum((c["vacuolization_pct"] / 100.0) * c["cell_area"] for c in group_cells)
+            agg_vac_pct = (total_vac_area_px / total_area_px * 100.0) if total_area_px > 0 else 0.0
+
+            # Calculate Size Range in physical units (µm²)
+            physical_areas = [c["cell_area"] / (px_per_um ** 2) for c in group_cells]
+            min_size = min(physical_areas)
+            max_size = max(physical_areas)
+
+            ag1, ag2, ag3 = st.columns(3)
+            ag1.metric("Selected Platelets", len(selected_group))
+            ag2.metric("Aggregate Vacuolization", f"{agg_vac_pct:.1f}%")
+            ag3.metric("Size Range (µm²)", f"{min_size:.2f} - {max_size:.2f}")
+
         # ====================== SINGLE PLATELET ZOOM & ANALYZE ======================
         st.markdown("---")
         st.subheader("🔍 Single Platelet Inspection")
 
         if cells:
-            cell_ids = [c["cell_id"] for c in cells]
-            selected_id = st.selectbox("Select Platelet (Cell ID)", options=cell_ids)
+            selected_id = st.selectbox("Select Platelet (Cell ID) to Zoom", options=cell_ids)
 
             selected_cell = next(c for c in cells if c["cell_id"] == selected_id)
             minr, minc, maxr, maxc = selected_cell["bbox"]
@@ -370,8 +406,12 @@ if raw_image is not None:
 
             with z_col3:
                 st.markdown("**Specific Metrics**")
-                st.metric("vacuolization", f"{selected_cell['vacuolization_pct']}%")
-                st.metric("Total Area (pixels)", f"{selected_cell['cell_area']}")
+                st.metric("Vacuolization", f"{selected_cell['vacuolization_pct']}%")
+                
+                # Show both pixel area and physical area side-by-side
+                physical_area = selected_cell['cell_area'] / (px_per_um ** 2)
+                st.metric("Total Area (µm²)", f"{physical_area:.2f}", help=f"{selected_cell['cell_area']} pixels")
+                
                 st.metric("Circularity", f"{selected_cell['circularity']}")
 
         # ====================== CHARTS ======================
