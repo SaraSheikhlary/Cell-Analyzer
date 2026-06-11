@@ -12,7 +12,7 @@ Features
   "healthy" and "abnormal" cells (generated on the fly)
 - **Quadrant Pre-Selection:** Divide image into NW, NE, SW, SE for targeted analysis.
 - Side-by-side view: original image vs color-coded segmentation overlay
-  (teal = cell boundaries, magenta = nuclei, with overlay numbers)
+  (teal = cell boundaries, magenta = nuclei)
 - Interactive data table with all extracted metrics per cell
 - Explainable rule-based classifier output ("Normal", "Borderline", "Abnormal")
 - Single Platelet Zoom inspection to isolate internal structures (Valorization)
@@ -241,21 +241,6 @@ if raw_image is not None:
     cells = results["cells"]
     summary = results["summary"]
 
-    # --- Generate Labeled Overlay with High-Contrast Text ---
-    labeled_overlay = results["overlay"].copy()
-    for c in cells:
-        cid = c["cell_id"]
-        minr, minc, maxr, maxc = c["bbox"]
-        
-        # Determine cell center dynamically via bounding box properties
-        center_x = minc + (maxc - minc) // 2
-        center_y = minr + (maxr - minr) // 2
-        text_pos = (center_x - 10, center_y + 5)
-        
-        # High-contrast render (thicker black backdrop line, followed by sharp white interior)
-        cv2.putText(labeled_overlay, str(cid), text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3)
-        cv2.putText(labeled_overlay, str(cid), text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
-
     st.subheader(f"2. Analysis Results ({quad_choice})")
 
     # ====================== SUMMARY METRICS ======================
@@ -278,10 +263,10 @@ if raw_image is not None:
     with img_col2:
         st.markdown("**Segmented Overlay**")
         st.image(
-            labeled_overlay,
+            results["overlay"],
             use_column_width=True,
             clamp=True,
-            caption="Teal = cell boundaries | Magenta = nuclei | Numbers = Cell ID Index",
+            caption="Teal = cell boundaries | Magenta = nuclei",
         )
 
     # ====================== DATA TABLE ======================
@@ -355,7 +340,7 @@ if raw_image is not None:
             maxc_p = min(working_image.shape[1], maxc + pad)
 
             zoom_img = working_image[minr_p:maxr_p, minc_p:maxc_p]
-            zoom_overlay = labeled_overlay[minr_p:maxr_p, minc_p:maxc_p]
+            zoom_overlay = results["overlay"][minr_p:maxr_p, minc_p:maxc_p]
 
             z_col1, z_col2, z_col3 = st.columns([1.5, 1.5, 1])
             
