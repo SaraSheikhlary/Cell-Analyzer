@@ -54,13 +54,11 @@ ImageLike = Union[str, bytes, io.BytesIO, np.ndarray, PILImage.Image]
 @dataclass
 class AnalysisParams:
     """Tunable parameters for segmentation and classification."""
-    min_cell_area: int = 200          # pixels — lowered to catch small edge platelets
-    max_cell_area: int = 40000        # pixels — NEW: discard giant artifacts/lines
+    min_cell_area: int = 380          # pixels — discard tiny debris
     min_nucleus_area: int = 65        # pixels
     nucleus_dark_percentile: float = 26.0   # inside each cell, take darkest X%
     cell_gaussian_sigma: float = 1.2
     nucleus_gaussian_sigma: float = 0.6
-    otsu_multiplier: float = 1.15     # NEW: push threshold higher to catch lighter platelets
     # Classification thresholds (tuned for typical 20-60x cell images)
     nc_ratio_abnormal: float = 0.58
     nc_ratio_very_high: float = 0.72
@@ -144,9 +142,7 @@ def _maybe_invert(gray: np.ndarray) -> Tuple[np.ndarray, bool]:
 def _segment_cells(gray: np.ndarray, params: AnalysisParams) -> np.ndarray:
     """Segment cell bodies using Watershed to split touching platelets."""
     blurred = filters.gaussian(gray, sigma=params.cell_gaussian_sigma)
-    
-    # Adjust Otsu to capture lighter grey platelets on the edges/middle
-    thresh = min(1.0, filters.threshold_otsu(blurred) * params.otsu_multiplier)
+    thresh = filters.threshold_otsu(blurred)
     
     # Initial binary mask
     mask = blurred < thresh
@@ -161,6 +157,7 @@ def _segment_cells(gray: np.ndarray, params: AnalysisParams) -> np.ndarray:
     distance = ndi.distance_transform_edt(mask)
     
     # 2. Find the peaks (the absolute centers of each platelet)
+    # min_distance prevents creating two centers inside one slightly oblong platelet
     coords = feature.peak_local_max(distance, min_distance=15, labels=mask)
     
     # 3. Create markers at those peak locations
@@ -193,10 +190,8 @@ def _segment_nuclei_inside_cells(
     regions = measure.regionprops(labeled_cells)
 
     for region in regions:
-        # Ignore regions too small or suspiciously massive (artifacts)
-        if region.area < params.min_cell_area or region.area > params.max_cell_area:
+        if region.area < params.min_cell_area:
             continue
-            
         minr, minc, maxr, maxc = region.bbox
         cell_sub = gray[minr:maxr, minc:maxc]
         sub_mask = region.image  # boolean mask of this cell inside bbox
@@ -260,13 +255,9 @@ def segment_and_analyze(
     nucleus_props_by_label = {nr.label: nr for nr in nucleus_regions}
 
     cells: List[Dict[str, Any]] = []
-    
-    total_vacuole_pixels = 0.0
-    total_valid_cell_area = 0.0
 
     for creg in cell_regions:
-        # Ignore artifacts that are too big (like grid lines) or too small
-        if creg.area < params.min_cell_area or creg.area > params.max_cell_area:
+        if creg.area < params.min_cell_area:
             continue
 
         # Cell shape features (directly from regionprops where possible)
@@ -299,22 +290,15 @@ def segment_and_analyze(
         cytoplasm_area = max(cell_area - nucleus_area, 1.0)
         nc_ratio = nucleus_area / cytoplasm_area
 
-        # --- REFINED: Calculate % of Valorization/Vacuolization ---
-        # Stricter criteria: must be an absolute difference > 0.20 AND a statistical outlier for that cell
+        # --- NEW: Calculate % of Valorization/Vacuolization ---
+        # We calculate the variance/spread of pixels inside the cell to quantify internal structures
         cell_pixels = gray[minr:maxr, minc:maxc][cell_bbox_mask]
         if len(cell_pixels) > 0:
             median_val = np.median(cell_pixels)
-            std_val = np.std(cell_pixels)
-            
-            diff = np.abs(cell_pixels - median_val)
-            vacuolization_px_count = np.sum((diff > 0.20) & (diff > 2.0 * std_val))
-            vacuolization_pct = (vacuolization_px_count / cell_area) * 100.0
+            vacuolization_pixels = np.sum(np.abs(cell_pixels - median_val) > 0.15) 
+            vacuolization_pct = (vacuolization_pixels / cell_area) * 100.0
         else:
-            vacuolization_px_count = 0
             vacuolization_pct = 0.0
-            
-        total_vacuole_pixels += vacuolization_px_count
-        total_valid_cell_area += cell_area
 
         # Classification
         classification, reasons = _classify_morphology(
@@ -336,14 +320,14 @@ def segment_and_analyze(
                 "perimeter": round(perimeter, 1),
                 "circularity": round(circularity, 3),
                 "eccentricity": round(eccentricity, 3),
-                "vacuolization_pct": round(vacuolization_pct, 1), 
-                "bbox": (minr, minc, maxr, maxc), 
+                "vacuolization_pct": round(vacuolization_pct, 1), # NEW METRIC
+                "bbox": (minr, minc, maxr, maxc), # NEW: Bounding box for zooming
                 "classification": classification,
                 "reasons": reasons,
             }
         )
 
-    # Sort so ID numbers flow logically from top-left to bottom-right
+    # Optional sort so ID numbers flow logically from top-left to bottom-right
     cells = sorted(cells, key=lambda c: (c["bbox"][0], c["bbox"][1]))
     for idx, c in enumerate(cells, start=1):
         c["cell_id"] = idx
@@ -362,7 +346,6 @@ def segment_and_analyze(
             "mean_nc_ratio": round(float(nc_values.mean()), 3),
             "median_nc_ratio": round(float(np.median(nc_values)), 3),
             "max_nc_ratio": round(float(nc_values.max()), 3),
-            "total_vacuolization_pct": round(100.0 * total_vacuole_pixels / total_valid_cell_area, 1) if total_valid_cell_area > 0 else 0.0, # NEW GLOBAL METRIC
             "image_inverted": was_inverted,
         }
     else:
@@ -373,7 +356,6 @@ def segment_and_analyze(
             "mean_nc_ratio": 0.0,
             "median_nc_ratio": 0.0,
             "max_nc_ratio": 0.0,
-            "total_vacuolization_pct": 0.0,
             "image_inverted": was_inverted,
         }
 
