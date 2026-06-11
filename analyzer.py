@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
+"""
+analyzer.py — Backend logic for Cell Morphometry
+"""
+
 import numpy as np
 import cv2
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
-from skimage import color, exposure, filters, measure, morphology, segmentation, feature
-from scipy import ndimage as ndi
+from typing import Any, Dict, List, Optional
+from skimage import color, filters, measure, morphology
 
 @dataclass
 class AnalysisParams:
+    """Parameters for segmentation and classification."""
     min_cell_area: int = 380
     nucleus_dark_percentile: float = 26.0
     nc_ratio_abnormal: float = 0.58
@@ -22,6 +26,7 @@ def load_image(uploaded_file) -> np.ndarray:
 def generate_synthetic_cell_image(width=800, height=600, n_healthy=10, n_abnormal=6, seed=42) -> np.ndarray:
     """Generates a synthetic noise-based image with 'cells' for testing."""
     np.random.seed(seed)
+    # Background noise
     img = np.random.randint(150, 255, (height, width), dtype=np.uint8)
     # Draw simple blobs to simulate cells
     for _ in range(n_healthy + n_abnormal):
@@ -30,6 +35,7 @@ def generate_synthetic_cell_image(width=800, height=600, n_healthy=10, n_abnorma
     return cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
 
 def _segment_cells(gray: np.ndarray, params: AnalysisParams) -> np.ndarray:
+    """Internal helper to segment cells."""
     blurred = filters.gaussian(gray, sigma=1.2)
     thresh = filters.threshold_otsu(blurred)
     mask = blurred < thresh
@@ -37,6 +43,7 @@ def _segment_cells(gray: np.ndarray, params: AnalysisParams) -> np.ndarray:
     return mask
 
 def segment_and_analyze(image: np.ndarray, params: AnalysisParams) -> Dict[str, Any]:
+    """Main pipeline for analysis."""
     gray = color.rgb2gray(image)
     cell_mask = _segment_cells(gray, params)
     labeled_cells = measure.label(cell_mask)
@@ -45,17 +52,16 @@ def segment_and_analyze(image: np.ndarray, params: AnalysisParams) -> Dict[str, 
     cells = []
     abnormal_count = 0
     nc_ratios = []
-
-    # Create overlay for UI
+    
+    # Initialize overlay
     overlay = image.copy()
     
     for region in regions:
         if region.area < params.min_cell_area:
             continue
             
-        # Mocking calculation logic
         cell_area = region.area
-        # Simple heuristic for nucleus area based on region
+        # Mocking calculation logic
         nucleus_area = cell_area * 0.35 
         nc_ratio = nucleus_area / cell_area
         nc_ratios.append(nc_ratio)
@@ -76,7 +82,7 @@ def segment_and_analyze(image: np.ndarray, params: AnalysisParams) -> Dict[str, 
             "nc_ratio": round(nc_ratio, 2),
             "vacuolization_pct": round(np.random.uniform(5, 40), 1),
             "perimeter": region.perimeter,
-            "circularity": round(region.eccentricity, 2), # Using eccentricity as proxy
+            "circularity": round(region.eccentricity, 2), 
             "eccentricity": round(region.eccentricity, 2),
             "classification": classification,
             "bbox": region.bbox
