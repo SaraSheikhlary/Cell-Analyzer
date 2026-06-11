@@ -472,10 +472,5 @@ def generate_synthetic_cell_image(
     img_float = img.astype(np.float32) / 255.0
     img_float = filters.gaussian(img_float, sigma=0.8, channel_axis=-1)
     img_float = util.random_noise(img_float, mode="gaussian", var=0.001, rng=rng)
-
-   # Optional sort so ID numbers flow logically from top-left to bottom-right
-cells = sorted(cells, key=lambda c: (c["bbox"][0], c["bbox"][1]))
-for idx, c in enumerate(cells, start=1):
-    c["cell_id"] = idx
     
     return (np.clip(img_float, 0, 1) * 255).astype(np.uint8)
