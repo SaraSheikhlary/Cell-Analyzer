@@ -1,28 +1,7 @@
 #!/usr/bin/env python3
 """
 app.py — Streamlit Web Interface for Cell Morphometry Analysis
-
-A clean, professional tool for quantitative cell and nuclear morphology analysis
-with a focus on distinguishing normal vs malignant-like features.
-
-Features
---------
-- Upload your own cell images (PNG, JPG, TIFF, etc.)
-- Or instantly load a synthetic demo image containing a realistic mix of
-  "healthy" and "abnormal" cells (generated on the fly)
-- **Quadrant Pre-Selection:** Divide image into NW, NE, SW, SE for targeted analysis.
-- Side-by-side view: original image vs color-coded segmentation overlay
-  (teal = cell boundaries, magenta = nuclei, with overlay numbers)
-- Interactive data table with all extracted metrics per cell
-- Explainable rule-based classifier output ("Normal", "Borderline", "Abnormal")
-- Single Platelet Zoom inspection to isolate internal structures (Valorization)
-- Multiple interactive charts:
-    • N/C ratio distribution
-    • N/C ratio vs Eccentricity scatter (colored by classification)
-    • Circularity comparison
-- Adjustable analysis parameters (sidebar)
-- One-click CSV download of the full metrics table
-- Summary statistics and malignancy-risk indicators
+(Updated for Watershed Segmentation Control)
 """
 
 from __future__ import annotations
@@ -37,10 +16,12 @@ import pandas as pd
 import streamlit as st
 from PIL import Image as PILImage
 
+# Ensure these imports match your local project structure
 from analyzer import (
     AnalysisParams,
     load_image,
     segment_and_analyze,
+    generate_synthetic_cell_image, # Ensure this is available if needed
 )
 
 # ----------------------------- Page Configuration ----------------------------
@@ -119,6 +100,16 @@ min_cell_area = st.sidebar.slider(
     value=380,
     step=20,
     help="Discard objects smaller than this (removes debris and fragments).",
+)
+
+# --- NEW CONTROL FOR WATERSHED ---
+watershed_dist = st.sidebar.slider(
+    "Watershed Sensitivity (Min Dist)",
+    min_value=5,
+    max_value=30,
+    value=15,
+    step=1,
+    help="Increase to prevent over-splitting (if large cells break apart). Decrease to force splitting of touching platelets.",
 )
 
 nucleus_percentile = st.sidebar.slider(
@@ -229,6 +220,7 @@ if raw_image is not None:
     # --- Step 2: Analysis ---
     params_dict = {
         "min_cell_area": min_cell_area,
+        "watershed_min_dist": watershed_dist, # <--- NEW PARAMETER
         "nucleus_dark_percentile": float(nucleus_percentile),
         "nc_ratio_abnormal": float(nc_abnormal),
         "nc_ratio_very_high": float(nc_very_high),
@@ -245,12 +237,10 @@ if raw_image is not None:
         cid = c["cell_id"]
         minr, minc, maxr, maxc = c["bbox"]
 
-        # Determine cell center dynamically via bounding box properties
         center_x = minc + (maxc - minc) // 2
         center_y = minr + (maxr - minr) // 2
         text_pos = (center_x - 10, center_y + 5)
 
-        # High-contrast render (thicker black backdrop line, followed by sharp white interior)
         cv2.putText(labeled_overlay, str(cid), text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3)
         cv2.putText(labeled_overlay, str(cid), text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
 
