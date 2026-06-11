@@ -20,7 +20,7 @@ from PIL import Image as PILImage
 
 from analyzer import (
     AnalysisParams,
-    generate_synthetic_cell_image,
+    generate_synthetic_cell_image, 
     load_image,
     segment_and_analyze,
 )
