@@ -28,6 +28,17 @@ from skimage import (
     util,
 )
 
+
+def generate_synthetic_cell_image(width, height, n_healthy, n_abnormal, seed=42):
+    """Generates a dummy image for testing the UI."""
+    np.random.seed(seed)
+    image = np.zeros((height, width), dtype=np.uint8)
+    # Simple logic to draw some circles as 'cells'
+    for _ in range(n_healthy + n_abnormal):
+        x = np.random.randint(50, width-50)
+        y = np.random.randint(50, height-50)
+        cv2.circle(image, (x, y), 20, (200, 200, 200), -1)
+    return image
 # ----------------------------- Type Aliases ----------------------------------
 ImageLike = Union[str, bytes, io.BytesIO, np.ndarray, PILImage.Image]
 
