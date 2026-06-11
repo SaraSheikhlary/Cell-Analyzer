@@ -6,7 +6,7 @@ Image processing pipeline for quantitative analysis of cell and nuclear morpholo
 Designed for brightfield, H&E, or fluorescence microscopy images of cells.
 
 Core capabilities:
-- Robust cell segmentation (Otsu + morphology, auto-inversion detection)
+- Robust cell segmentation (Watershed + morphology, auto-inversion detection)
 - Nucleus segmentation inside detected cells (adaptive darkness threshold)
 - Extraction of clinically relevant morphometric features:
     * Cell area, nucleus area, cytoplasm area
@@ -140,17 +140,42 @@ def _maybe_invert(gray: np.ndarray) -> Tuple[np.ndarray, bool]:
 
 # ----------------------------- Segmentation ----------------------------------
 def _segment_cells(gray: np.ndarray, params: AnalysisParams) -> np.ndarray:
-    """Segment cell bodies using Otsu + morphological cleanup."""
+    """Segment cell bodies using Watershed to split touching platelets."""
     blurred = filters.gaussian(gray, sigma=params.cell_gaussian_sigma)
     thresh = filters.threshold_otsu(blurred)
+    
+    # Initial binary mask
     mask = blurred < thresh
 
     # Morphological cleanup
-    mask = morphology.remove_small_objects(mask, max_size=params.min_cell_area // 2)
-    mask = morphology.remove_small_holes(mask, max_size=200)
-    mask = morphology.opening(mask, morphology.disk(3))
+    mask = morphology.remove_small_objects(mask, min_size=params.min_cell_area // 2)
+    mask = morphology.remove_small_holes(mask, area_threshold=200)
     mask = morphology.closing(mask, morphology.disk(2))
-    mask = morphology.remove_small_objects(mask, max_size=params.min_cell_area)
+
+    # --- WATERSHED SEGMENTATION ---
+    # 1. Calculate the distance from the edge of the platelet to its center
+    distance = ndi.distance_transform_edt(mask)
+    
+    # 2. Find the peaks (the absolute centers of each platelet)
+    # min_distance prevents creating two centers inside one slightly oblong platelet
+    coords = feature.peak_local_max(distance, min_distance=15, labels=mask)
+    
+    # 3. Create markers at those peak locations
+    markers = np.zeros(distance.shape, dtype=bool)
+    markers[tuple(coords.T)] = True
+    markers, _ = ndi.label(markers)
+    
+    # 4. Run watershed to separate the touching regions
+    labeled_platelets = segmentation.watershed(-distance, markers, mask=mask)
+    
+    # 5. Carve 1-pixel boundaries between touching platelets so the 
+    # downstream code recognizes them as separate objects
+    boundaries = segmentation.find_boundaries(labeled_platelets, mode='inner')
+    mask[boundaries] = False
+
+    # Final cleanup of any dust created by the boundary splitting
+    mask = morphology.remove_small_objects(mask, min_size=params.min_cell_area)
+    
     return mask
 
 
@@ -181,12 +206,12 @@ def _segment_nuclei_inside_cells(
         nuc_sub = (cell_sub < t) & sub_mask
 
         # Clean small speckles inside the cell
-        nuc_sub = morphology.remove_small_objects(nuc_sub, max_size=params.min_nucleus_area // 2)
+        nuc_sub = morphology.remove_small_objects(nuc_sub, min_size=params.min_nucleus_area // 2)
         nucleus_mask[minr:maxr, minc:maxc] |= nuc_sub
 
     # Global morphological cleanup on the assembled nucleus mask
     nucleus_mask = morphology.opening(nucleus_mask, morphology.disk(1))
-    nucleus_mask = morphology.remove_small_objects(nucleus_mask, max_size=params.min_nucleus_area)
+    nucleus_mask = morphology.remove_small_objects(nucleus_mask, min_size=params.min_nucleus_area)
     return nucleus_mask
 
 
@@ -301,6 +326,11 @@ def segment_and_analyze(
                 "reasons": reasons,
             }
         )
+
+    # Optional sort so ID numbers flow logically from top-left to bottom-right
+    cells = sorted(cells, key=lambda c: (c["bbox"][0], c["bbox"][1]))
+    for idx, c in enumerate(cells, start=1):
+        c["cell_id"] = idx
 
     # --- Visualizations ---
     overlay = _create_overlay(image, cell_mask, nucleus_mask)
