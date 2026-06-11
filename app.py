@@ -21,7 +21,7 @@ from analyzer import (
     AnalysisParams,
     load_image,
     segment_and_analyze,
-    generate_synthetic_cell_image, # Ensure this is available if needed
+    generate_synthetic_cell_image,
 )
 
 # ----------------------------- Page Configuration ----------------------------
@@ -49,7 +49,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-
 # ----------------------------- Cached Analysis -------------------------------
 @st.cache_data(show_spinner="Analyzing image...", ttl=300)
 def run_analysis(image_array: np.ndarray, params_dict: dict) -> dict:
@@ -57,11 +56,9 @@ def run_analysis(image_array: np.ndarray, params_dict: dict) -> dict:
     params = AnalysisParams(**params_dict)
     return segment_and_analyze(image_array, params=params)
 
-
 def fig_to_st(fig: plt.Figure):
     """Helper to display matplotlib figures nicely."""
     st.pyplot(fig, use_container_width=True, clear_figure=True)
-
 
 def draw_quadrant_grid(img_array: np.ndarray) -> np.ndarray:
     """Draws a target grid with NW, NE, SW, SE labels for visual selection."""
@@ -85,7 +82,6 @@ def draw_quadrant_grid(img_array: np.ndarray) -> np.ndarray:
     put_text("SE", int(w * 0.75) - 20, int(h * 0.75))
 
     return vis
-
 
 # ----------------------------- Sidebar Controls ------------------------------
 st.sidebar.title("🔬 Cell Morphometry")
@@ -220,7 +216,7 @@ if raw_image is not None:
     # --- Step 2: Analysis ---
     params_dict = {
         "min_cell_area": min_cell_area,
-        "watershed_min_dist": watershed_dist, # <--- NEW PARAMETER
+        "watershed_min_dist": watershed_dist,
         "nucleus_dark_percentile": float(nucleus_percentile),
         "nc_ratio_abnormal": float(nc_abnormal),
         "nc_ratio_very_high": float(nc_very_high),
@@ -306,14 +302,12 @@ if raw_image is not None:
             "Classification",
         ]
 
-
         def color_class(val: str):
             if "Abnormal" in val:
                 return "background-color: #ffcccc; font-weight: 600"
             elif "Borderline" in val:
                 return "background-color: #fff3cd; font-weight: 500"
             return "background-color: #d4edda"
-
 
         styled = display_df.style.map(color_class, subset=["Classification"])
         st.dataframe(styled, use_container_width=True, hide_index=True, height=320)
