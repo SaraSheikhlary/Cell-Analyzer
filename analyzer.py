@@ -279,4 +279,27 @@ def _create_overlay(image, cell_mask, nucleus_mask, vacuole_mask) -> np.ndarray:
 
     return overlay
 
-# (Synthetic data generator remains unchanged...)
+def generate_synthetic_cell_image(width: int, height: int, n_healthy: int, n_abnormal: int, seed: int = None) -> np.ndarray:
+    """Generates a synthetic image with random cells for testing."""
+    if seed:
+        np.random.seed(seed)
+    
+    # Create dark background
+    image = np.zeros((height, width, 3), dtype=np.uint8)
+    
+    def draw_cell(img, x, y, radius, color, is_abnormal=False):
+        cv2.circle(img, (x, y), radius, color, -1)
+        # Add nucleus
+        nuc_radius = int(radius * (0.6 if is_abnormal else 0.3))
+        cv2.circle(img, (x, y), nuc_radius, (50, 50, 50), -1)
+        
+    for _ in range(n_healthy + n_abnormal):
+        x = np.random.randint(50, width - 50)
+        y = np.random.randint(50, height - 50)
+        radius = np.random.randint(20, 40)
+        
+        is_abnormal = _ > n_healthy
+        color = (200, 200, 200) if not is_abnormal else (150, 150, 255)
+        draw_cell(image, x, y, radius, color, is_abnormal)
+        
+    return image
