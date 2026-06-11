@@ -224,9 +224,13 @@ def segment_and_analyze(
     cells = sorted(cells, key=lambda c: (c["bbox"][0], c["bbox"][1]))
     for idx, c in enumerate(cells, start=1): c["cell_id"] = idx
 
+    # Calculate abnormal stats
+    num_abnormal = sum(1 for c in cells if "Abnormal" in c["classification"])
+    
     summary = {
         "num_cells": len(cells),
-        "abnormal_pct": round(100.0 * sum(1 for c in cells if "Abnormal" in c["classification"]) / len(cells), 1) if cells else 0.0,
+        "num_abnormal": num_abnormal,
+        "abnormal_pct": round(100.0 * num_abnormal / len(cells), 1) if cells else 0.0,
         "total_vacuolization_pct": round(global_vac_pct, 2),
         "image_inverted": was_inverted,
     }
@@ -279,6 +283,7 @@ def _create_overlay(image, cell_mask, nucleus_mask, vacuole_mask) -> np.ndarray:
 
     return overlay
 
+
 def generate_synthetic_cell_image(width: int, height: int, n_healthy: int, n_abnormal: int, seed: int = None) -> np.ndarray:
     """Generates a synthetic image with random cells for testing."""
     if seed:
@@ -293,12 +298,12 @@ def generate_synthetic_cell_image(width: int, height: int, n_healthy: int, n_abn
         nuc_radius = int(radius * (0.6 if is_abnormal else 0.3))
         cv2.circle(img, (x, y), nuc_radius, (50, 50, 50), -1)
         
-    for _ in range(n_healthy + n_abnormal):
+    for i in range(n_healthy + n_abnormal):
         x = np.random.randint(50, width - 50)
         y = np.random.randint(50, height - 50)
         radius = np.random.randint(20, 40)
         
-        is_abnormal = _ > n_healthy
+        is_abnormal = i >= n_healthy
         color = (200, 200, 200) if not is_abnormal else (150, 150, 255)
         draw_cell(image, x, y, radius, color, is_abnormal)
         
