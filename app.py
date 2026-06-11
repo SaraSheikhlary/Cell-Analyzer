@@ -4,25 +4,6 @@ app.py — Streamlit Web Interface for Cell Morphometry Analysis
 
 A clean, professional tool for quantitative cell and nuclear morphology analysis
 with a focus on distinguishing normal vs malignant-like features.
-
-Features
---------
-- Upload your own cell images (PNG, JPG, TIFF, etc.)
-- Or instantly load a synthetic demo image containing a realistic mix of
-  "healthy" and "abnormal" cells (generated on the fly)
-- **Quadrant Pre-Selection:** Divide image into NW, NE, SW, SE for targeted analysis.
-- Side-by-side view: original image vs color-coded segmentation overlay
-  (teal = cell boundaries, magenta = nuclei, with overlay numbers)
-- Interactive data table with all extracted metrics per cell
-- Explainable rule-based classifier output ("Normal", "Borderline", "Abnormal")
-- Single Platelet Zoom inspection to isolate internal structures (Valorization)
-- Multiple interactive charts:
-    • N/C ratio distribution
-    • N/C ratio vs Eccentricity scatter (colored by classification)
-    • Circularity comparison
-- Adjustable analysis parameters (sidebar)
-- One-click CSV download of the full metrics table
-- Summary statistics and malignancy-risk indicators
 """
 
 from __future__ import annotations
@@ -131,6 +112,16 @@ nucleus_percentile = st.sidebar.slider(
     help="Inside each cell, pixels darker than this percentile are considered nucleus.",
 )
 
+# --- NEW: Vacuole Sensitivity Slider ---
+vacuole_threshold = st.sidebar.slider(
+    "Vacuole threshold offset",
+    min_value=0.05,
+    max_value=0.30,
+    value=0.15,
+    step=0.01,
+    help="Higher values are more selective; lower values capture more subtle holes.",
+)
+
 st.sidebar.markdown("---")
 st.sidebar.caption("Classification thresholds (advanced)")
 
@@ -231,6 +222,7 @@ if raw_image is not None:
     params_dict = {
         "min_cell_area": min_cell_area,
         "nucleus_dark_percentile": float(nucleus_percentile),
+        "vacuole_threshold_offset": float(vacuole_threshold),
         "nc_ratio_abnormal": float(nc_abnormal),
         "nc_ratio_very_high": float(nc_very_high),
     }
@@ -258,11 +250,12 @@ if raw_image is not None:
     st.subheader(f"2. Analysis Results ({quad_choice})")
 
     # ====================== SUMMARY METRICS ======================
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Cells detected", summary["num_cells"])
     m2.metric("Flagged abnormal", f"{summary['num_abnormal']} ({summary['abnormal_pct']}%)")
     m3.metric("Mean N/C ratio", summary["mean_nc_ratio"])
     m4.metric("Max N/C ratio", summary["max_nc_ratio"])
+    m5.metric("Total Vacuolization", f"{summary['total_vacuolization_pct']}%")
 
     if summary["image_inverted"]:
         st.caption("ℹ️ Image was automatically inverted for analysis (bright objects on dark background detected).")
@@ -280,7 +273,7 @@ if raw_image is not None:
             labeled_overlay,
             use_column_width=True,
             clamp=True,
-            caption="Teal = cell boundaries | Magenta = nuclei | Numbers = Cell ID Index",
+            caption="Teal = cell boundaries | Magenta = nuclei | Yellow = Vacuoles | Numbers = Cell ID Index",
         )
 
     # ====================== DATA TABLE ======================
