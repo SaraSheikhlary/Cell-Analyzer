@@ -265,7 +265,7 @@ def segment_and_analyze(
         cytoplasm_area = max(cell_area - nucleus_area, 1.0)
         nc_ratio = nucleus_area / cytoplasm_area
 
-        # --- NEW: Calculate % of Vacuolization ---
+        # --- NEW: Calculate % of Valorization/Vacuolization ---
         # We calculate the variance/spread of pixels inside the cell to quantify internal structures
         cell_pixels = gray[minr:maxr, minc:maxc][cell_bbox_mask]
         if len(cell_pixels) > 0:
@@ -302,11 +302,6 @@ def segment_and_analyze(
             }
         )
 
-   # Optional sort so ID numbers flow logically from top-left to bottom-right
-cells = sorted(cells, key=lambda c: (c["bbox"][0], c["bbox"][1]))
-for idx, c in enumerate(cells, start=1):
-    c["cell_id"] = idx
-   
     # --- Visualizations ---
     overlay = _create_overlay(image, cell_mask, nucleus_mask)
 
