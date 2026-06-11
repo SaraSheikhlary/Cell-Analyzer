@@ -282,7 +282,7 @@ if raw_image is not None:
                 "nucleus_area",
                 "cytoplasm_area",
                 "nc_ratio",
-                "valorization_pct",
+                "vacuolization_pct",
                 "perimeter",
                 "circularity",
                 "eccentricity",
@@ -296,7 +296,7 @@ if raw_image is not None:
             "Nucleus Area",
             "Cytoplasm Area",
             "N/C Ratio",
-            "Valorization %",
+            "vacuolization %",
             "Perimeter",
             "Circularity",
             "Eccentricity",
@@ -354,7 +354,7 @@ if raw_image is not None:
                 
             with z_col3:
                 st.markdown("**Specific Metrics**")
-                st.metric("Valorization / Vacuolization", f"{selected_cell['valorization_pct']}%")
+                st.metric("vacuolization", f"{selected_cell['vacuolization_pct']}%")
                 st.metric("Total Area (pixels)", f"{selected_cell['cell_area']}")
                 st.metric("Circularity", f"{selected_cell['circularity']}")
 
