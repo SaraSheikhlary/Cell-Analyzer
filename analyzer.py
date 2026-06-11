@@ -270,10 +270,10 @@ def segment_and_analyze(
         cell_pixels = gray[minr:maxr, minc:maxc][cell_bbox_mask]
         if len(cell_pixels) > 0:
             median_val = np.median(cell_pixels)
-            valorization_pixels = np.sum(np.abs(cell_pixels - median_val) > 0.15) 
-            valorization_pct = (valorization_pixels / cell_area) * 100.0
+            vacuolization_pixels = np.sum(np.abs(cell_pixels - median_val) > 0.15) 
+            vacuolization_pct = (vacuolization_pixels / cell_area) * 100.0
         else:
-            valorization_pct = 0.0
+            vacuolization_pct = 0.0
 
         # Classification
         classification, reasons = _classify_morphology(
@@ -295,7 +295,7 @@ def segment_and_analyze(
                 "perimeter": round(perimeter, 1),
                 "circularity": round(circularity, 3),
                 "eccentricity": round(eccentricity, 3),
-                "valorization_pct": round(valorization_pct, 1), # NEW METRIC
+                "vacuolization_pct": round(vacuolization_pct, 1), # NEW METRIC
                 "bbox": (minr, minc, maxr, maxc), # NEW: Bounding box for zooming
                 "classification": classification,
                 "reasons": reasons,
