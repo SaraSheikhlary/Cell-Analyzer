@@ -1,7 +1,28 @@
 #!/usr/bin/env python3
 """
 app.py — Streamlit Web Interface for Cell Morphometry Analysis
-(Updated for Watershed Segmentation Control)
+
+A clean, professional tool for quantitative cell and nuclear morphology analysis
+with a focus on distinguishing normal vs malignant-like features.
+
+Features
+--------
+- Upload your own cell images (PNG, JPG, TIFF, etc.)
+- Or instantly load a synthetic demo image containing a realistic mix of
+  "healthy" and "abnormal" cells (generated on the fly)
+- **Quadrant Pre-Selection:** Divide image into NW, NE, SW, SE for targeted analysis.
+- Side-by-side view: original image vs color-coded segmentation overlay
+  (teal = cell boundaries, magenta = nuclei, with overlay numbers)
+- Interactive data table with all extracted metrics per cell
+- Explainable rule-based classifier output ("Normal", "Borderline", "Abnormal")
+- Single Platelet Zoom inspection to isolate internal structures (Valorization)
+- Multiple interactive charts:
+    • N/C ratio distribution
+    • N/C ratio vs Eccentricity scatter (colored by classification)
+    • Circularity comparison
+- Adjustable analysis parameters (sidebar)
+- One-click CSV download of the full metrics table
+- Summary statistics and malignancy-risk indicators
 """
 
 from __future__ import annotations
@@ -16,12 +37,11 @@ import pandas as pd
 import streamlit as st
 from PIL import Image as PILImage
 
-# Ensure these imports match your local project structure
 from analyzer import (
     AnalysisParams,
+    generate_synthetic_cell_image,
     load_image,
     segment_and_analyze,
-    generate_synthetic_cell_image,
 )
 
 # ----------------------------- Page Configuration ----------------------------
@@ -49,6 +69,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
 # ----------------------------- Cached Analysis -------------------------------
 @st.cache_data(show_spinner="Analyzing image...", ttl=300)
 def run_analysis(image_array: np.ndarray, params_dict: dict) -> dict:
@@ -56,9 +77,11 @@ def run_analysis(image_array: np.ndarray, params_dict: dict) -> dict:
     params = AnalysisParams(**params_dict)
     return segment_and_analyze(image_array, params=params)
 
+
 def fig_to_st(fig: plt.Figure):
     """Helper to display matplotlib figures nicely."""
     st.pyplot(fig, use_container_width=True, clear_figure=True)
+
 
 def draw_quadrant_grid(img_array: np.ndarray) -> np.ndarray:
     """Draws a target grid with NW, NE, SW, SE labels for visual selection."""
@@ -83,6 +106,7 @@ def draw_quadrant_grid(img_array: np.ndarray) -> np.ndarray:
 
     return vis
 
+
 # ----------------------------- Sidebar Controls ------------------------------
 st.sidebar.title("🔬 Cell Morphometry")
 st.sidebar.markdown("**Malignant vs Normal Feature Extraction**")
@@ -96,16 +120,6 @@ min_cell_area = st.sidebar.slider(
     value=380,
     step=20,
     help="Discard objects smaller than this (removes debris and fragments).",
-)
-
-# --- NEW CONTROL FOR WATERSHED ---
-watershed_dist = st.sidebar.slider(
-    "Watershed Sensitivity (Min Dist)",
-    min_value=5,
-    max_value=30,
-    value=15,
-    step=1,
-    help="Increase to prevent over-splitting (if large cells break apart). Decrease to force splitting of touching platelets.",
 )
 
 nucleus_percentile = st.sidebar.slider(
@@ -216,7 +230,6 @@ if raw_image is not None:
     # --- Step 2: Analysis ---
     params_dict = {
         "min_cell_area": min_cell_area,
-        "watershed_min_dist": watershed_dist,
         "nucleus_dark_percentile": float(nucleus_percentile),
         "nc_ratio_abnormal": float(nc_abnormal),
         "nc_ratio_very_high": float(nc_very_high),
@@ -233,10 +246,12 @@ if raw_image is not None:
         cid = c["cell_id"]
         minr, minc, maxr, maxc = c["bbox"]
 
+        # Determine cell center dynamically via bounding box properties
         center_x = minc + (maxc - minc) // 2
         center_y = minr + (maxr - minr) // 2
         text_pos = (center_x - 10, center_y + 5)
 
+        # High-contrast render (thicker black backdrop line, followed by sharp white interior)
         cv2.putText(labeled_overlay, str(cid), text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3)
         cv2.putText(labeled_overlay, str(cid), text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
 
@@ -302,12 +317,14 @@ if raw_image is not None:
             "Classification",
         ]
 
+
         def color_class(val: str):
             if "Abnormal" in val:
                 return "background-color: #ffcccc; font-weight: 600"
             elif "Borderline" in val:
                 return "background-color: #fff3cd; font-weight: 500"
             return "background-color: #d4edda"
+
 
         styled = display_df.style.map(color_class, subset=["Classification"])
         st.dataframe(styled, use_container_width=True, hide_index=True, height=320)
