@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 analyzer.py — Cell Morphometry Analysis Backend
-Updated with true physical hole-tracking and precision edge segmentation.
+Updated with true physical hole-tracking, precision edge segmentation, 
+and clinical-style diagnostic circle overlays.
 """
 
 from __future__ import annotations
@@ -47,21 +48,58 @@ def _classify_cell(nc_ratio: float, eccentricity: float, circularity: float, nuc
         return "Abnormal (malignant-like)", reasons
     return ("Borderline" if reasons else "Normal morphology", reasons)
 
-def _create_overlay(image: np.ndarray, cell_mask: np.ndarray, nucleus_mask: np.ndarray, vacuole_mask: np.ndarray) -> np.ndarray:
+def _draw_diagnostic_circles(overlay: np.ndarray, mask: np.ndarray, color: tuple, thickness: int = 2, is_vacuole: bool = False):
+    """Draws smooth, clinical-style circles around detected features."""
+    contours, _ = cv2.findContours((mask.astype(np.uint8) * 255), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    for c in contours:
+        # Calculate the minimum enclosing circle for the feature
+        (x, y), radius = cv2.minEnclosingCircle(c)
+        center = (int(x), int(y))
+        radius = int(radius)
+        
+        if radius > 0:
+            # If it's a vacuole, make the circle slightly tighter
+            if is_vacuole:
+                radius = max(2, radius - 1)
+            else:
+                # Add a little padding to mimic a human drawing around the cell
+                radius += 3
+                
+            cv2.circle(overlay, center, radius, color, thickness)
+
+def _create_overlay(image: np.ndarray, cell_mask: np.ndarray, nucleus_mask: np.ndarray, vacuole_mask: np.ndarray, cells_data: list = None) -> np.ndarray:
+    """Creates an overlay mimicking manual diagnostic annotations."""
     overlay = image.copy()
     if overlay.dtype != np.uint8:
         overlay = (np.clip(overlay, 0, 1) * 255).astype(np.uint8)
 
-    cell_contours, _ = cv2.findContours((cell_mask.astype(np.uint8) * 255), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    nuc_contours, _ = cv2.findContours((nucleus_mask.astype(np.uint8) * 255), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    vac_contours, _ = cv2.findContours((vacuole_mask.astype(np.uint8) * 255), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    # 1. Draw Vacuoles (Yellow circles)
+    _draw_diagnostic_circles(overlay, vacuole_mask, (255, 235, 59), thickness=1, is_vacuole=True)
 
-    # Teal boundaries for cells
-    cv2.drawContours(overlay, cell_contours, -1, (0, 188, 212), 1)
-    # Magenta boundaries for nuclei
-    cv2.drawContours(overlay, nuc_contours, -1, (255, 0, 255), 1)
-    # Bright Yellow boundaries for real structural vacuoles (holes)
-    cv2.drawContours(overlay, vac_contours, -1, (255, 235, 59), 1)
+    # 2. Draw Cell Boundaries
+    # Color-code the circles based on the classification and vacuolization
+    if cells_data:
+        for cell in cells_data:
+            bbox = cell["bbox"]
+            y1, x1, y2, x2 = bbox
+            
+            # RGB Color Assignments
+            cell_color = (0, 255, 0) # Default Green (Normal)
+            if "Abnormal" in cell["classification"] or cell["vacuolization_pct"] > 15.0:
+                cell_color = (255, 0, 0) # Red for high concern/abnormal
+            elif "Borderline" in cell["classification"] or cell["vacuolization_pct"] > 5.0:
+                 cell_color = (255, 165, 0) # Orange for borderline
+
+            # Draw a circle roughly around the bounding box center
+            center_y = int((y1 + y2) / 2)
+            center_x = int((x1 + x2) / 2)
+            radius = int(max(y2-y1, x2-x1) / 2) + 4 # Padding
+            
+            cv2.circle(overlay, (center_x, center_y), radius, cell_color, 2)
+    else:
+        # Fallback if no specific cell data is passed
+        _draw_diagnostic_circles(overlay, cell_mask, (0, 255, 0), thickness=2)
 
     return overlay
 
@@ -179,7 +217,8 @@ def segment_and_analyze(image_array: np.ndarray, params: AnalysisParams) -> dict
         })
         cell_id_counter += 1
 
-    overlay_img = _create_overlay(image_array, cell_mask_total, nucleus_mask_total, vacuole_mask_total)
+    # Call with cells to enable dynamic color coding
+    overlay_img = _create_overlay(image_array, cell_mask_total, nucleus_mask_total, vacuole_mask_total, cells)
     
     num_cells = len(cells)
     num_abnormal = sum(1 for c in cells if "Abnormal" in c["classification"])
