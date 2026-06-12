@@ -40,7 +40,8 @@ from analyzer import (
     load_image,
     segment_and_analyze,
 )
-
+import analyzer
+print(f"DEBUG: Analyzer loaded from {analyzer.__file__}")
 # ----------------------------- Page Configuration ----------------------------
 st.set_page_config(
     page_title="Cell Morphometry Analyzer",
