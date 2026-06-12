@@ -40,8 +40,7 @@ from analyzer import (
     load_image,
     segment_and_analyze,
 )
-import analyzer
-print(f"DEBUG: Analyzer loaded from {analyzer.__file__}")
+
 # ----------------------------- Page Configuration ----------------------------
 st.set_page_config(
     page_title="Cell Morphometry Analyzer",
@@ -129,16 +128,6 @@ nucleus_percentile = st.sidebar.slider(
     help="Inside each cell, pixels darker than this percentile are considered nucleus.",
 )
 
-# --- Added Vacuole Sensitivity Slider ---
-vacuole_offset = st.sidebar.slider(
-    "Vacuole sensitivity (offset)",
-    min_value=0.0,
-    max_value=0.5,
-    value=0.15,
-    step=0.01,
-    help="How much brighter than the median a region must be to be counted as a vacuole.",
-)
-
 st.sidebar.markdown("---")
 st.sidebar.caption("Classification thresholds (advanced)")
 
@@ -157,7 +146,7 @@ nc_very_high = st.sidebar.slider(
     step=0.01,
 )
 
-# --- Physical Scale Input ---
+# --- NEW: Physical Scale Input ---
 st.sidebar.markdown("---")
 st.sidebar.header("Microscopy Scale")
 px_per_um = st.sidebar.number_input(
@@ -251,7 +240,6 @@ if raw_image is not None:
     params_dict = {
         "min_cell_area": min_cell_area,
         "nucleus_dark_percentile": float(nucleus_percentile),
-        "vacuole_threshold_offset": float(vacuole_offset), # Passed to analyzer-4
         "nc_ratio_abnormal": float(nc_abnormal),
         "nc_ratio_very_high": float(nc_very_high),
     }
@@ -342,12 +330,14 @@ if raw_image is not None:
             "Classification",
         ]
 
+
         def color_class(val: str):
             if "Abnormal" in val:
                 return "background-color: #ffcccc; font-weight: 600"
             elif "Borderline" in val:
                 return "background-color: #fff3cd; font-weight: 500"
             return "background-color: #d4edda"
+
 
         styled = display_df.style.map(color_class, subset=["Classification"])
         st.dataframe(styled, use_container_width=True, hide_index=True, height=320)
@@ -364,7 +354,8 @@ if raw_image is not None:
         # ====================== CUSTOM GROUP ANALYSIS ======================
         st.markdown("---")
         st.subheader("🧮 Custom Group Analysis")
-        st.markdown("Select multiple platelets to calculate their combined aggregate vacuolization and view their exact physical size range.")
+        st.markdown(
+            "Select multiple platelets to calculate their combined aggregate vacuolization and view their exact physical size range.")
 
         cell_ids = [c["cell_id"] for c in cells]
         selected_group = st.multiselect("Select Platelets (Cell IDs) from current quadrant:", options=cell_ids)
@@ -419,11 +410,11 @@ if raw_image is not None:
             with z_col3:
                 st.markdown("**Specific Metrics**")
                 st.metric("Vacuolization", f"{selected_cell['vacuolization_pct']}%")
-                
+
                 # Show both pixel area and physical area side-by-side
                 physical_area = selected_cell['cell_area'] / (px_per_um ** 2)
                 st.metric("Total Area (µm²)", f"{physical_area:.2f}", help=f"{selected_cell['cell_area']} pixels")
-                
+
                 st.metric("Circularity", f"{selected_cell['circularity']}")
 
         # ====================== CHARTS ======================
