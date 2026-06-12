@@ -128,6 +128,7 @@ nucleus_percentile = st.sidebar.slider(
     help="Inside each cell, pixels darker than this percentile are considered nucleus.",
 )
 
+# --- Added Vacuole Sensitivity Slider ---
 vacuole_offset = st.sidebar.slider(
     "Vacuole sensitivity (offset)",
     min_value=0.0,
@@ -155,7 +156,7 @@ nc_very_high = st.sidebar.slider(
     step=0.01,
 )
 
-# --- NEW: Physical Scale Input ---
+# --- Physical Scale Input ---
 st.sidebar.markdown("---")
 st.sidebar.header("Microscopy Scale")
 px_per_um = st.sidebar.number_input(
@@ -249,7 +250,7 @@ if raw_image is not None:
     params_dict = {
         "min_cell_area": min_cell_area,
         "nucleus_dark_percentile": float(nucleus_percentile),
-        "vacuole_threshold_offset": float(vacuole_offset),
+        "vacuole_threshold_offset": float(vacuole_offset), # Passed to analyzer-4
         "nc_ratio_abnormal": float(nc_abnormal),
         "nc_ratio_very_high": float(nc_very_high),
     }
@@ -299,7 +300,7 @@ if raw_image is not None:
             labeled_overlay,
             use_column_width=True,
             clamp=True,
-            caption="Teal = cell boundaries | Magenta = nuclei | Green = vacuoles | Numbers = Cell ID Index",
+            caption="Teal = cell boundaries | Magenta = nuclei | Numbers = Cell ID Index",
         )
 
     # ====================== DATA TABLE ======================
@@ -348,7 +349,7 @@ if raw_image is not None:
             return "background-color: #d4edda"
 
         styled = display_df.style.map(color_class, subset=["Classification"])
-        st.dataframe(styled, use_column_width=True, hide_index=True, height=320)
+        st.dataframe(styled, use_container_width=True, hide_index=True, height=320)
 
         csv_buffer = io.StringIO()
         display_df.to_csv(csv_buffer, index=False)
