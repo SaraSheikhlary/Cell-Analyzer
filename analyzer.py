@@ -14,13 +14,13 @@ from scipy import ndimage as ndi
 from skimage import color, draw, exposure, feature, filters, measure, morphology, segmentation, util
 
 # ----------------------------- Configuration ---------------------------------
-@dataclass
+@@dataclass
 class AnalysisParams:
     """Tunable parameters for segmentation and classification."""
     min_cell_area: int = 200
     min_nucleus_area: int = 65
     nucleus_dark_percentile: float = 26.0
-    vacuole_threshold_offset: float = 0.15  # <--- This is what your app.py is looking for
+    vacuole_threshold_offset: float = 0.15  
     cell_gaussian_sigma: float = 1.2
     nucleus_gaussian_sigma: float = 0.6
     nc_ratio_abnormal: float = 0.58
