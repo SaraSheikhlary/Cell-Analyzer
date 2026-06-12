@@ -14,7 +14,7 @@ from scipy import ndimage as ndi
 from skimage import color, draw, exposure, feature, filters, measure, morphology, segmentation, util
 
 # ----------------------------- Configuration ---------------------------------
-@@dataclass
+@dataclass
 class AnalysisParams:
     """Tunable parameters for segmentation and classification."""
     min_cell_area: int = 200
