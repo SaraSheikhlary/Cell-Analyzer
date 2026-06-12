@@ -289,7 +289,7 @@ if raw_image is not None:
             labeled_overlay,
             use_column_width=True,
             clamp=True,
-            caption="Green = Normal | Orange = Borderline | Red = Abnormal/High Vacuoles | Yellow = Vacuoles | Numbers = Cell ID Index",
+            caption="Teal = cell boundaries | Magenta = nuclei | Numbers = Cell ID Index",
         )
 
     # ====================== DATA TABLE ======================
