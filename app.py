@@ -208,7 +208,7 @@ if raw_image is not None:
 
     with q_col1:
         grid_overlay = draw_quadrant_grid(raw_image)
-        st.image(grid_overlay, use_column_width=True, clamp=True, caption="Full Image Overview")
+        st.image(grid_overlay, width="stretch", clamp=True, caption="Full Image Overview")
 
     with q_col2:
         st.markdown("**Select a region to analyze:**")
@@ -281,13 +281,13 @@ if raw_image is not None:
 
     with img_col1:
         st.markdown(f"**Target Area ({quad_choice})**")
-        st.image(working_image, use_column_width=True, clamp=True)
+        st.image(working_image, width="stretch", clamp=True)
 
     with img_col2:
         st.markdown("**Segmented Overlay**")
         st.image(
             labeled_overlay,
-            use_column_width=True,
+            width="stretch",
             clamp=True,
             caption="Teal = cell boundaries | Magenta = nuclei | Numbers = Cell ID Index",
         )
@@ -401,11 +401,11 @@ if raw_image is not None:
 
             with z_col1:
                 st.markdown(f"**Zoomed Platelet (ID: {selected_id})**")
-                st.image(zoom_img, use_column_width=True, clamp=True)
+                st.image(zoom_img, width="stretch", clamp=True)
 
             with z_col2:
                 st.markdown("**Segmented Overlay**")
-                st.image(zoom_overlay, use_column_width=True, clamp=True)
+                st.image(zoom_overlay, width="stretch", clamp=True)
 
             with z_col3:
                 st.markdown("**Specific Metrics**")
