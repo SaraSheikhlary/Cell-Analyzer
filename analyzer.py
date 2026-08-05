@@ -54,7 +54,7 @@ ImageLike = Union[str, bytes, io.BytesIO, np.ndarray, PILImage.Image]
 @dataclass
 class AnalysisParams:
     """Tunable parameters for segmentation and classification."""
-    min_cell_area: int = 380  # pixels — discard tiny debris
+    min_cell_area: int = 2500  # pixels — increased to discard small TEM debris/fragments
     min_nucleus_area: int = 65  # pixels
     nucleus_dark_percentile: float = 26.0  # inside each cell, take darkest X%
     cell_gaussian_sigma: float = 1.2
@@ -148,7 +148,7 @@ def _segment_cells(gray: np.ndarray, params: AnalysisParams) -> np.ndarray:
     # Initial binary mask
     mask = blurred < thresh
 
-    # Morphological cleanup
+    # Morphological cleanup (uses updated min_cell_area to drop debris)
     mask = morphology.remove_small_objects(mask, min_size=params.min_cell_area // 2)
     mask = morphology.remove_small_holes(mask, area_threshold=200)
     mask = morphology.closing(mask, morphology.disk(2))
