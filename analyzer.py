@@ -54,8 +54,8 @@ ImageLike = Union[str, bytes, io.BytesIO, np.ndarray, PILImage.Image]
 @dataclass
 class AnalysisParams:
     """Tunable parameters for segmentation and classification."""
-    min_cell_area: int = 2500  # pixels — increased to discard small TEM debris/fragments
-    min_nucleus_area: int = 65  # pixels
+    min_cell_area: int = 10000  # pixels — drastically increased to ignore TEM debris
+    min_nucleus_area: int = 150  # pixels — increased to avoid tiny noise granules
     nucleus_dark_percentile: float = 26.0  # inside each cell, take darkest X%
     cell_gaussian_sigma: float = 1.2
     nucleus_gaussian_sigma: float = 0.6
@@ -158,8 +158,7 @@ def _segment_cells(gray: np.ndarray, params: AnalysisParams) -> np.ndarray:
     distance = ndi.distance_transform_edt(mask)
 
     # 2. Erode the mask slightly to snap bridges between touching cells
-    # This guarantees each separate cell gets its own marker without slicing elongated cells.
-    marker_mask = morphology.erosion(mask, morphology.disk(3))
+    marker_mask = morphology.erosion(mask, morphology.disk(4))
     markers = measure.label(marker_mask)
 
     # 3. Run watershed to separate touching regions
