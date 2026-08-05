@@ -156,9 +156,14 @@ def _segment_cells(gray: np.ndarray, params: AnalysisParams) -> np.ndarray:
     # 1. Calculate the distance from the edge of the platelet to its center
     distance = ndi.distance_transform_edt(mask)
 
-    # 2. Find the peaks (the absolute centers of each platelet)
-    # min_distance prevents creating two centers inside one slightly oblong platelet
-    coords = feature.peak_local_max(distance, min_distance=15, labels=mask)
+    # 2. Find the peaks with balanced min_distance and absolute threshold 
+    # to prevent over-segmenting elongated cells while keeping round cells separated.
+    coords = feature.peak_local_max(
+        distance, 
+        min_distance=20, 
+        threshold_abs_min=3.0, 
+        labels=mask
+    )
 
     # 3. Create markers at those peak locations
     markers = np.zeros(distance.shape, dtype=bool)
