@@ -112,10 +112,10 @@ st.sidebar.header("Analysis Parameters")
 
 min_cell_area = st.sidebar.slider(
     "Minimum cell area (pixels)",
-    min_value=150,
-    max_value=1200,
-    value=380,
-    step=20,
+    min_value=1000,
+    max_value=30000,
+    value=10000,
+    step=1000,
     help="Discard objects smaller than this (removes debris and fragments).",
 )
 
