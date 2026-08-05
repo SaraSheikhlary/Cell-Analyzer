@@ -1,4 +1,4 @@
-#!/usr/init/env python3
+#!/usr/bin/env python3
 """
 analyzer.py — Cell Morphometry Analysis Backend
 
@@ -140,7 +140,8 @@ def _maybe_invert(gray: np.ndarray) -> Tuple[np.ndarray, bool]:
 
 # ----------------------------- Segmentation ----------------------------------
 def _segment_cells(gray: np.ndarray, params: AnalysisParams) -> np.ndarray:
-    """Segment cell bodies using Watershed to split touching platelets."""
+    """Segment cell bodies using Watershed with erosion-based markers 
+    to perfectly separate touching cells while keeping elongated and round cells unified."""
     blurred = filters.gaussian(gray, sigma=params.cell_gaussian_sigma)
     thresh = filters.threshold_otsu(blurred)
 
@@ -152,32 +153,19 @@ def _segment_cells(gray: np.ndarray, params: AnalysisParams) -> np.ndarray:
     mask = morphology.remove_small_holes(mask, area_threshold=200)
     mask = morphology.closing(mask, morphology.disk(2))
 
-    # --- WATERSHED SEGMENTATION ---
-    # 1. Calculate the distance from the edge of the platelet to its center
+    # --- WATERSHED WITH ERODED MARKERS ---
+    # 1. Calculate distance transform
     distance = ndi.distance_transform_edt(mask)
 
-    # 2. Smooth the distance map to eliminate minor ripples/bumps along 
-    # the spine of elongated cells, ensuring exactly one peak per platelet.
-    smooth_distance = filters.gaussian(distance, sigma=4.0)
+    # 2. Erode the mask slightly to snap bridges between touching cells
+    # This guarantees each separate cell gets its own marker without slicing elongated cells.
+    marker_mask = morphology.erosion(mask, morphology.disk(3))
+    markers = measure.label(marker_mask)
 
-    # 3. Find the peaks on the smoothed distance map
-    coords = feature.peak_local_max(
-        smooth_distance, 
-        min_distance=20, 
-        threshold_abs=3.0, 
-        labels=mask
-    )
-
-    # 4. Create markers at those peak locations
-    markers = np.zeros(distance.shape, dtype=bool)
-    markers[tuple(coords.T)] = True
-    markers, _ = ndi.label(markers)
-
-    # 5. Run watershed to separate touching regions using the raw distance map
+    # 3. Run watershed to separate touching regions
     labeled_platelets = segmentation.watershed(-distance, markers, mask=mask)
 
-    # 6. Carve 1-pixel boundaries between touching platelets so the
-    # downstream code recognizes them as separate objects
+    # 4. Carve 1-pixel boundaries between touching platelets
     boundaries = segmentation.find_boundaries(labeled_platelets, mode='inner')
     mask[boundaries] = False
 
