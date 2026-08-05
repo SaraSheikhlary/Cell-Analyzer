@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/init/env python3
 """
 analyzer.py — Cell Morphometry Analysis Backend
 
@@ -156,24 +156,27 @@ def _segment_cells(gray: np.ndarray, params: AnalysisParams) -> np.ndarray:
     # 1. Calculate the distance from the edge of the platelet to its center
     distance = ndi.distance_transform_edt(mask)
 
-   # 2. Find the peaks with balanced min_distance and absolute threshold 
-    # to prevent over-segmenting elongated cells while keeping round cells separated.
+    # 2. Smooth the distance map to eliminate minor ripples/bumps along 
+    # the spine of elongated cells, ensuring exactly one peak per platelet.
+    smooth_distance = filters.gaussian(distance, sigma=4.0)
+
+    # 3. Find the peaks on the smoothed distance map
     coords = feature.peak_local_max(
-        distance, 
+        smooth_distance, 
         min_distance=20, 
         threshold_abs=3.0, 
         labels=mask
     )
 
-    # 3. Create markers at those peak locations
+    # 4. Create markers at those peak locations
     markers = np.zeros(distance.shape, dtype=bool)
     markers[tuple(coords.T)] = True
     markers, _ = ndi.label(markers)
 
-    # 4. Run watershed to separate the touching regions
+    # 5. Run watershed to separate touching regions using the raw distance map
     labeled_platelets = segmentation.watershed(-distance, markers, mask=mask)
 
-    # 5. Carve 1-pixel boundaries between touching platelets so the
+    # 6. Carve 1-pixel boundaries between touching platelets so the
     # downstream code recognizes them as separate objects
     boundaries = segmentation.find_boundaries(labeled_platelets, mode='inner')
     mask[boundaries] = False
