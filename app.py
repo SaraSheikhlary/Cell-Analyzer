@@ -146,7 +146,7 @@ nc_very_high = st.sidebar.slider(
     step=0.01,
 )
 
-# --- NEW: Physical Scale Input ---
+# --- Physical Scale Input ---
 st.sidebar.markdown("---")
 st.sidebar.header("Microscopy Scale")
 px_per_um = st.sidebar.number_input(
@@ -313,11 +313,13 @@ if raw_image is not None:
             ]
         ].copy()
 
-        # Add physical area calculation based on user input scale
+        # Insert physical area and current quadrant source columns
         display_df.insert(2, "cell_area_um2", display_df["cell_area"] / (px_per_um ** 2))
+        display_df.insert(1, "Quadrant", quad_choice)
 
         display_df.columns = [
             "Cell ID",
+            "Quadrant",
             "Area (px)",
             "Area (µm²)",
             "Nucleus Area",
