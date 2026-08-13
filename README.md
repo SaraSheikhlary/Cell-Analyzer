@@ -1,5 +1,5 @@
 ```markdown
-# Cell Morphometry Analyzer
+Cell Morphometry Analyzer
 
 A clean, professional Python application for quantitative cell and nuclear morphology analysis with a focus on distinguishing **normal vs malignant-like** features.
 
@@ -14,7 +14,7 @@ The tool extracts the key morphometric parameters requested:
 
 It includes a fully transparent, rule-based classifier that flags abnormal cells using classic cytopathology criteria (high N/C ratio, nuclear pleomorphism, loss of circularity, etc.).
 
-## Project Structure
+Project Structure
 
 ```text
 cell-analyzer/
@@ -26,7 +26,7 @@ cell-analyzer/
 
 ```
 
-## Features
+Features
 
 **Backend (`analyzer.py`)**
 
@@ -53,7 +53,7 @@ cell-analyzer/
 
 If no image is uploaded, the app generates realistic synthetic microscopy-like images on the fly so you can test everything immediately.
 
-## Installation
+ Installation
 
 ```bash
 cd cell-analyzer
@@ -70,7 +70,7 @@ pip install -r requirements.txt
 
 ```
 
-## Usage
+ Usage
 
 ### Web Interface (recommended)
 
@@ -90,7 +90,7 @@ Then open the URL shown in your terminal (usually http://localhost:8501).
 5. Explore the metrics table, group stats, single-cell zoom, and charts
 6. Download the CSV for further analysis
 
-### Programmatic Use (analyzer only)
+Programmatic Use (analyzer only)
 
 ```python
 from analyzer import (
@@ -116,7 +116,7 @@ for cell in result["cells"]:
 
 ```
 
-## The Lightweight Classifier
+The Lightweight Classifier
 
 The classifier is deliberately simple and fully explainable:
 
@@ -137,7 +137,7 @@ The classifier is deliberately simple and fully explainable:
 
 These thresholds are exposed in the Streamlit sidebar so you can tune sensitivity.
 
-## Synthetic Data Generator
+Synthetic Data Generator
 
 The `generate_synthetic_cell_image()` function creates realistic-looking test images containing:
 
@@ -146,7 +146,7 @@ The `generate_synthetic_cell_image()` function creates realistic-looking test im
 
 It adds subtle noise, blur, and vignette to mimic real microscope output. All metrics and classifications shown in demo mode are produced by the exact same analysis pipeline that runs on real uploads.
 
-## Dependencies
+Dependencies
 
 Core stack:
 
@@ -160,20 +160,20 @@ Core stack:
 
 All versions are pinned conservatively in `requirements.txt`.
 
-## Extending the Tool
+Extending the Tool
 
 * Add a trained scikit-learn / PyTorch classifier as an optional backend (the current rule-based one remains the fallback).
 * Support multi-channel fluorescence (separate channels for cytoplasm vs nucleus).
 * Export annotated images or full segmentation masks.
 * Add batch folder processing.
 
-## License & Attribution
+License & Attribution
 
 This project is licensed under the **MIT License** - see the [LICENSE](https://www.google.com/search?q=LICENSE) file for details.
 
 This project was created as a focused demonstration of clean scientific Python architecture, reproducible synthetic data, and explainable analysis for biomedical imaging.
 
-## Quick Start (TL;DR)
+Quick Start (TL;DR)
 
 ```bash
 cd cell-analyzer
