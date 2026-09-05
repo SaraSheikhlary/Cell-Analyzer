@@ -63,6 +63,7 @@ class AnalysisParams:
     eccentricity_abnormal: float = 0.74
     circularity_abnormal: float = 0.58
     nucleus_area_large: float = 520.0
+    auto_invert: bool = True  # Control auto-inversion from the sidebar
 
 
 # ----------------------------- Image Loading ---------------------------------
@@ -230,7 +231,12 @@ def segment_and_analyze(
 
     # --- Preprocessing ---
     gray = _to_grayscale(image)
-    gray, was_inverted = _maybe_invert(gray)
+    
+    if params.auto_invert:
+        gray, was_inverted = _maybe_invert(gray)
+    else:
+        was_inverted = False
+        
     gray = exposure.rescale_intensity(gray, in_range="image", out_range=(0.0, 1.0))
 
     # --- Cell segmentation ---
