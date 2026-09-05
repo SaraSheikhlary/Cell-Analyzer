@@ -158,9 +158,14 @@ px_per_um = st.sidebar.number_input(
     help="Enter the scale from your TEM image to calculate actual sizes. E.g., if a 5µm scale bar is 500 pixels, enter 100."
 )
 
-# --- Image Preprocessing Override ---
+# --- Image Preprocessing Controls ---
 st.sidebar.markdown("---")
 st.sidebar.header("Image Preprocessing")
+auto_invert = st.sidebar.checkbox(
+    "Auto-invert dark backgrounds",
+    value=True,
+    help="Automatically invert image colors if a dark background is detected."
+)
 force_invert = st.sidebar.checkbox(
     "Force color inversion",
     value=False,
@@ -255,6 +260,7 @@ if raw_image is not None:
         "nucleus_dark_percentile": float(nucleus_percentile),
         "nc_ratio_abnormal": float(nc_abnormal),
         "nc_ratio_very_high": float(nc_very_high),
+        "auto_invert": auto_invert,
     }
 
     results = run_analysis(working_image, params_dict)
