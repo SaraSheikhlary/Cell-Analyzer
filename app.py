@@ -158,6 +158,15 @@ px_per_um = st.sidebar.number_input(
     help="Enter the scale from your TEM image to calculate actual sizes. E.g., if a 5µm scale bar is 500 pixels, enter 100."
 )
 
+# --- Image Preprocessing Override ---
+st.sidebar.markdown("---")
+st.sidebar.header("Image Preprocessing")
+force_invert = st.sidebar.checkbox(
+    "Force color inversion",
+    value=False,
+    help="Check to manually invert image colors if auto-detection fails or if analyzing bright-on-dark micrographs."
+)
+
 st.sidebar.markdown("---")
 if st.sidebar.button("Reset to defaults", use_container_width=True):
     st.rerun()
@@ -195,6 +204,10 @@ elif use_synthetic:
     with st.spinner("Generating realistic synthetic cell image..."):
         raw_image = generate_synthetic_cell_image(width=800, height=600, n_healthy=10, n_abnormal=6, seed=42)
     source_label = "Synthetic demo image"
+
+# Apply manual inversion override if selected
+if raw_image is not None and force_invert:
+    raw_image = 255 - raw_image
 
 # ----------------------------- Run Workflow ----------------------------------
 if raw_image is not None:
