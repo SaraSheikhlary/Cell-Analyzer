@@ -1,494 +1,481 @@
 #!/usr/bin/env python3
 """
-app.py — Streamlit Web Interface for Cell Morphometry Analysis
+analyzer.py — Cell & Platelet Morphometry Analysis Backend
 
-A clean, professional tool for quantitative cell and nuclear morphology analysis
-with a focus on distinguishing normal vs malignant-like features.
+Image processing pipeline for quantitative analysis of cell and nuclear morphology,
+optimized for transmission electron microscopy (TEM) and light microscopy images.
 
-Features
---------
-- Upload your own cell images (PNG, JPG, TIFF, etc.)
-- Or instantly load a synthetic demo image containing a realistic mix of
-  "healthy" and "abnormal" cells (generated on the fly)
-- **Quadrant Pre-Selection:** Divide image into NW, NE, SW, SE for targeted analysis.
-- Side-by-side view: original image vs color-coded segmentation overlay
-  (teal = cell boundaries, magenta = nuclei, with overlay numbers)
-- Interactive data table with all extracted metrics per cell
-- Explainable rule-based classifier output ("Normal", "Borderline", "Abnormal")
-- Custom Group Analysis for multi-platelet vacuolization and physical size ranges
-- Single Platelet Zoom inspection to isolate internal structures
-- Multiple interactive charts
-- Adjustable analysis parameters (sidebar)
-- One-click CSV download of the full metrics table
+Core capabilities:
+- Robust cell/platelet segmentation (Watershed + morphology, auto-inversion detection)
+- Nucleus segmentation inside detected cells (adaptive darkness threshold)
+- Quadrant-based partitioning (NW, NE, SW, SE) for large high-resolution TEM regional analysis
+- Extraction of clinically relevant morphometric features:
+    * Cell area, nucleus area, cytoplasm area
+    * Cell perimeter
+    * Circularity (4πA/P²)
+    * Eccentricity (from second moments)
+    * Nucleus-to-cytoplasm (N/C) area ratio
+    * Vacuolization percentage (internal structure variance)
+- Lightweight, fully explainable rule-based classifier for normal vs abnormal morphology.
+- High-quality synthetic image generator for immediate testing without real user images.
+
+Dependencies: numpy, opencv-python-headless, scikit-image, scipy, Pillow
 """
 
 from __future__ import annotations
 
 import io
-from typing import Optional
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import cv2
-import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
-import streamlit as st
 from PIL import Image as PILImage
-
-from analyzer import (
-    AnalysisParams,
-    generate_synthetic_cell_image,
-    load_image,
-    segment_and_analyze,
+from scipy import ndimage as ndi
+from skimage import (
+    color,
+    draw,
+    exposure,
+    feature,
+    filters,
+    measure,
+    morphology,
+    segmentation,
+    util,
 )
 
-# ----------------------------- Page Configuration ----------------------------
-st.set_page_config(
-    page_title="Cell Morphometry Analyzer",
-    page_icon="🔬",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+# ----------------------------- Type Aliases ----------------------------------
+ImageLike = Union[str, bytes, io.BytesIO, np.ndarray, PILImage.Image]
 
-# ----------------------------- Custom Styling --------------------------------
-st.markdown(
+
+# ----------------------------- Configuration ---------------------------------
+@dataclass
+class AnalysisParams:
+    """Tunable parameters for segmentation and classification."""
+    min_cell_area: int = 10000  # pixels — drastically increased to ignore TEM debris
+    min_nucleus_area: int = 150  # pixels — increased to avoid tiny noise granules
+    nucleus_dark_percentile: float = 26.0  # inside each cell, take darkest X%
+    cell_gaussian_sigma: float = 1.2
+    nucleus_gaussian_sigma: float = 0.6
+    # Classification thresholds (tuned for typical platelet/cell images)
+    nc_ratio_abnormal: float = 0.58
+    nc_ratio_very_high: float = 0.72
+    eccentricity_abnormal: float = 0.74
+    circularity_abnormal: float = 0.58
+    nucleus_area_large: float = 520.0
+
+
+# ----------------------------- Image Loading ---------------------------------
+def load_image(source: ImageLike) -> np.ndarray:
     """
-    <style>
-    .main .block-container { padding-top: 1.2rem; }
-    .metric-card {
-        background-color: #f8f9fa;
-        border-radius: 8px;
-        padding: 12px 16px;
-        border: 1px solid #e9ecef;
-    }
-    .stDataFrame { font-size: 0.9rem; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+    Load an image from multiple possible sources and return RGB uint8 array.
+
+    Accepts:
+    - filesystem path (str)
+    - bytes / BytesIO (e.g. Streamlit upload)
+    - PIL Image
+    - numpy array (RGB, RGBA, or grayscale)
+    """
+    if isinstance(source, (str,)):
+        img = cv2.imread(source, cv2.IMREAD_COLOR)
+        if img is None:
+            raise FileNotFoundError(f"Could not read image at {source}")
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        return img
+
+    if isinstance(source, (bytes, bytearray)):
+        source = io.BytesIO(source)
+
+    if isinstance(source, io.BytesIO):
+        pil = PILImage.open(source)
+        return np.array(pil.convert("RGB"))
+
+    if isinstance(source, PILImage.Image):
+        return np.array(source.convert("RGB"))
+
+    if isinstance(source, np.ndarray):
+        arr = source
+        if arr.ndim == 2:
+            arr = color.gray2rgb(arr)
+        elif arr.shape[2] == 4:  # RGBA
+            arr = arr[:, :, :3]
+        if arr.dtype != np.uint8:
+            arr = (np.clip(arr, 0, 1) * 255).astype(np.uint8) if arr.max() <= 1.0 else arr.astype(np.uint8)
+        return arr
+
+    raise TypeError(f"Unsupported image source type: {type(source)}")
 
 
-# ----------------------------- Cached Analysis -------------------------------
-@st.cache_data(show_spinner="Analyzing image...", ttl=300)
-def run_analysis(image_array: np.ndarray, params_dict: dict) -> dict:
-    """Cached wrapper around the heavy analysis pipeline."""
-    params = AnalysisParams(**params_dict)
-    return segment_and_analyze(image_array, params=params)
+def _to_grayscale(img: np.ndarray) -> np.ndarray:
+    """Convert RGB to float32 grayscale in [0, 1]."""
+    if img.ndim == 2:
+        gray = img.astype(np.float32) / 255.0
+    else:
+        gray = color.rgb2gray(img)
+    return gray.astype(np.float32)
 
 
-def fig_to_st(fig: plt.Figure):
-    """Helper to display matplotlib figures nicely."""
-    st.pyplot(fig, use_container_width=True, clear_figure=True)
+def _maybe_invert(gray: np.ndarray) -> Tuple[np.ndarray, bool]:
+    """
+    Heuristic: if the "dark" objects (putative cells/nuclei) occupy the
+    brighter part of the histogram, invert the image. This makes the
+    pipeline robust to both fluorescence (bright objects) and brightfield/TEM.
+    """
+    p1, p2 = np.percentile(gray, [2, 98])
+    if p2 - p1 < 0.05:
+        return gray, False
+
+    t = filters.threshold_otsu(gray)
+    dark_fraction = (gray < t).mean()
+
+    bright_fraction = (gray > t).mean()
+    if bright_fraction > 0.35 and dark_fraction < 0.25:
+        return 1.0 - gray, True
+    return gray, False
 
 
-def draw_quadrant_grid(img_array: np.ndarray) -> np.ndarray:
-    """Draws a target grid with NW, NE, SW, SE labels for visual selection."""
-    vis = img_array.copy()
-    h, w = vis.shape[:2]
-
-    # Draw crosshairs
-    color = (255, 215, 0)  # Gold/Yellow
-    thickness = 2
-    cv2.line(vis, (w // 2, 0), (w // 2, h), color, thickness)
-    cv2.line(vis, (0, h // 2), (w, h // 2), color, thickness)
-
-    # Add text with dark outline for readability on any background
-    def put_text(text, x, y):
-        cv2.putText(vis, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 4)
-        cv2.putText(vis, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
-
-    put_text("NW", int(w * 0.25) - 20, int(h * 0.25))
-    put_text("NE", int(w * 0.75) - 20, int(h * 0.25))
-    put_text("SW", int(w * 0.25) - 20, int(h * 0.75))
-    put_text("SE", int(w * 0.75) - 20, int(h * 0.75))
-
-    return vis
-
-
-# ----------------------------- Sidebar Controls ------------------------------
-st.sidebar.title("🔬 Cell Morphometry")
-st.sidebar.markdown("**Malignant vs Normal Feature Extraction**")
-
-st.sidebar.header("Analysis Parameters")
-
-min_cell_area = st.sidebar.slider(
-    "Minimum cell area (pixels)",
-    min_value=100,      # Lowered to capture smaller phantom cells
-    max_value=600000,   # Increased to support massive TEM structures
-    value=500,          # Lowered default so phantom demo works automatically
-    step=100,
-    help="Discard objects smaller than this (removes debris and fragments).",
-)
-
-nucleus_percentile = st.sidebar.slider(
-    "Nucleus darkness percentile",
-    min_value=10,
-    max_value=45,
-    value=26,
-    step=1,
-    help="Inside each cell, pixels darker than this percentile are considered nucleus.",
-)
-
-st.sidebar.markdown("---")
-st.sidebar.caption("Classification thresholds (advanced)")
-
-nc_abnormal = st.sidebar.slider(
-    "N/C ratio — Abnormal threshold",
-    min_value=0.40,
-    max_value=0.80,
-    value=0.58,
-    step=0.01,
-)
-nc_very_high = st.sidebar.slider(
-    "N/C ratio — Very high threshold",
-    min_value=0.55,
-    max_value=0.90,
-    value=0.72,
-    step=0.01,
-)
-
-# --- Physical Scale Input ---
-st.sidebar.markdown("---")
-st.sidebar.header("Microscopy Scale")
-px_per_um = st.sidebar.number_input(
-    "Pixels per micrometer (px/µm)",
-    min_value=0.1,
-    max_value=5000.0,
-    value=1.0,  # Default 1.0 means pixels = micrometers if unknown
-    step=1.0,
-    help="Enter the scale from your TEM image to calculate actual sizes. E.g., if a 5µm scale bar is 500 pixels, enter 100."
-)
-
-# --- Image Preprocessing Controls ---
-st.sidebar.markdown("---")
-st.sidebar.header("Image Preprocessing")
-auto_invert = st.sidebar.checkbox(
-    "Auto-invert dark backgrounds",
-    value=True,
-    help="Automatically invert image colors if a dark background is detected."
-)
-force_invert = st.sidebar.checkbox(
-    "Force color inversion",
-    value=False,
-    help="Check to manually invert image colors if auto-detection fails or if analyzing bright-on-dark micrographs."
-)
-
-st.sidebar.markdown("---")
-if st.sidebar.button("Reset to defaults", use_container_width=True):
-    st.rerun()
-
-# ----------------------------- Main Title & Intro ---------------------------
-st.title("Cell Morphometry Analyzer")
-st.caption("Quantitative extraction of cell & nuclear shape features with targeted region analysis.")
-
-# ----------------------------- Image Source ----------------------------------
-uploaded_file = st.file_uploader(
-    "Upload a cell image (PNG, JPG, TIFF, etc.)",
-    type=["png", "jpg", "jpeg", "tif", "tiff", "bmp"],
-    accept_multiple_files=False,
-)
-
-use_synthetic = False
-raw_image: Optional[np.ndarray] = None
-source_label = ""
-
-col_a, col_b = st.columns([1, 1])
-
-with col_a:
-    if st.button("✨ Load synthetic demo (healthy + abnormal cells)", type="primary", use_container_width=True):
-        use_synthetic = True
-
-with col_b:
-    if uploaded_file is None and not use_synthetic:
-        st.info("Upload an image above, or load the synthetic demo.", icon="ℹ️")
-
-# Load image
-if uploaded_file is not None:
-    raw_image = load_image(uploaded_file)
-    source_label = f"Uploaded: {uploaded_file.name}"
-elif use_synthetic:
-    with st.spinner("Generating realistic synthetic cell image..."):
-        raw_image = generate_synthetic_cell_image(width=800, height=600, n_healthy=10, n_abnormal=6, seed=42)
-    source_label = "Synthetic demo image"
-
-# Apply manual inversion override if selected
-if raw_image is not None and force_invert:
-    raw_image = 255 - raw_image
-
-# ----------------------------- Run Workflow ----------------------------------
-if raw_image is not None:
-    st.markdown(f"**Source:** {source_label}")
-    st.markdown("---")
-
-    # --- Step 1: Quadrant Selection ---
-    st.subheader("1. Quadrant Pre-Selection")
-
-    q_col1, q_col2 = st.columns([1.5, 1])
-
-    with q_col1:
-        grid_overlay = draw_quadrant_grid(raw_image)
-        st.image(grid_overlay, width="stretch", clamp=True, caption="Full Image Overview")
-
-    with q_col2:
-        st.markdown("**Select a region to analyze:**")
-        quad_choice = st.radio(
-            "Region",
-            ["Full Image (Default)", "NW (Top-Left)", "NE (Top-Right)", "SW (Bottom-Left)", "SE (Bottom-Right)"],
-            label_visibility="collapsed"
-        )
-
-        # Perform the actual crop based on selection
-        h, w = raw_image.shape[:2]
-        working_image = raw_image.copy()
-
-        if quad_choice == "NW (Top-Left)":
-            working_image = raw_image[0:h // 2, 0:w // 2]
-        elif quad_choice == "NE (Top-Right)":
-            working_image = raw_image[0:h // 2, w // 2:w]
-        elif quad_choice == "SW (Bottom-Left)":
-            working_image = raw_image[h // 2:h, 0:w // 2]
-        elif quad_choice == "SE (Bottom-Right)":
-            working_image = raw_image[h // 2:h, w // 2:w]
-
-        st.success(f"Target locked: **{quad_choice}**")
-        st.caption(f"Resolution of selected area: {working_image.shape[1]}x{working_image.shape[0]} px")
-
-    st.markdown("---")
-
-    # --- Step 2: Analysis ---
-    params_dict = {
-        "min_cell_area": min_cell_area,
-        "nucleus_dark_percentile": float(nucleus_percentile),
-        "nc_ratio_abnormal": float(nc_abnormal),
-        "nc_ratio_very_high": float(nc_very_high),
-        "auto_invert": auto_invert,
+# ----------------------------- Quadrant Partitioning -------------------------
+def split_image_quadrants(image: np.ndarray) -> Dict[str, np.ndarray]:
+    """
+    Split a high-resolution TEM image into four distinct quadrants
+    (NW, NE, SW, SE) for targeted regional analysis and memory management.
+    """
+    h, w = image.shape[:2]
+    mh, mw = h // 2, w // 2
+    return {
+        "NW": image[:mh, :mw],
+        "NE": image[:mh, mw:],
+        "SW": image[mh:, :mw],
+        "SE": image[mh:, mw:],
     }
 
-    results = run_analysis(working_image, params_dict)
 
-    cells = results["cells"]
-    summary = results["summary"]
+# ----------------------------- Segmentation ----------------------------------
+def _segment_cells(gray: np.ndarray, params: AnalysisParams) -> np.ndarray:
+    """Segment cell bodies using Watershed with erosion-based markers 
+    to perfectly separate touching cells while keeping elongated and round cells unified."""
+    blurred = filters.gaussian(gray, sigma=params.cell_gaussian_sigma)
+    thresh = filters.threshold_otsu(blurred)
 
-    # --- Generate Labeled Overlay with High-Contrast Text ---
-    labeled_overlay = results["overlay"].copy()
-    for c in cells:
-        cid = c["cell_id"]
-        minr, minc, maxr, maxc = c["bbox"]
+    # Initial binary mask
+    mask = blurred < thresh
 
-        # Determine cell center dynamically via bounding box properties
-        center_x = minc + (maxc - minc) // 2
-        center_y = minr + (maxr - minr) // 2
-        text_pos = (center_x - 10, center_y + 5)
+    # Morphological cleanup (uses updated min_cell_area to drop debris)
+    mask = morphology.remove_small_objects(mask, min_size=params.min_cell_area // 2)
+    mask = morphology.remove_small_holes(mask, area_threshold=200)
+    mask = morphology.closing(mask, morphology.disk(2))
 
-        # High-contrast render (thicker black backdrop line, followed by sharp white interior)
-        cv2.putText(labeled_overlay, str(cid), text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3)
-        cv2.putText(labeled_overlay, str(cid), text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+    # --- WATERSHED WITH ERODED MARKERS ---
+    distance = ndi.distance_transform_edt(mask)
+    marker_mask = morphology.erosion(mask, morphology.disk(4))
+    markers = measure.label(marker_mask)
 
-    st.subheader(f"2. Analysis Results ({quad_choice})")
+    labeled_platelets = segmentation.watershed(-distance, markers, mask=mask)
+    boundaries = segmentation.find_boundaries(labeled_platelets, mode='inner')
+    mask[boundaries] = False
 
-    # ====================== SUMMARY METRICS ======================
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Cells detected", summary["num_cells"])
-    m2.metric("Flagged abnormal", f"{summary.get('num_abnormal', 0)} ({summary.get('abnormal_pct', 0.0)}%)")
-    m3.metric("Mean N/C ratio", summary["mean_nc_ratio"])
-    m4.metric("Max N/C ratio", summary["max_nc_ratio"])
+    mask = morphology.remove_small_objects(mask, min_size=params.min_cell_area)
+    return mask
 
-    if summary["image_inverted"]:
-        st.caption("ℹ️ Image was automatically inverted for analysis (bright objects on dark background detected).")
 
-    # ====================== SIDE-BY-SIDE IMAGES ======================
-    img_col1, img_col2 = st.columns(2, gap="medium")
+def _segment_nuclei_inside_cells(
+        gray: np.ndarray, cell_mask: np.ndarray, labeled_cells: np.ndarray, params: AnalysisParams
+) -> np.ndarray:
+    """
+    For each detected cell, find the darker sub-region as nucleus.
+    Returns a boolean nucleus mask aligned with the original image.
+    """
+    nucleus_mask = np.zeros_like(cell_mask, dtype=bool)
+    regions = measure.regionprops(labeled_cells)
 
-    with img_col1:
-        st.markdown(f"**Target Area ({quad_choice})**")
-        st.image(working_image, width="stretch", clamp=True)
+    for region in regions:
+        if region.area < params.min_cell_area:
+            continue
+        minr, minc, maxr, maxc = region.bbox
+        cell_sub = gray[minr:maxr, minc:maxc]
+        sub_mask = region.image
 
-    with img_col2:
-        st.markdown("**Segmented Overlay**")
-        st.image(
-            labeled_overlay,
-            width="stretch",
-            clamp=True,
-            caption="Teal = cell boundaries | Magenta = nuclei | Numbers = Cell ID Index",
+        intensities = cell_sub[sub_mask]
+        if len(intensities) < 30:
+            continue
+
+        t = np.percentile(intensities, params.nucleus_dark_percentile)
+        nuc_sub = (cell_sub < t) & sub_mask
+
+        nuc_sub = morphology.remove_small_objects(nuc_sub, min_size=params.min_nucleus_area // 2)
+        nucleus_mask[minr:maxr, minc:maxc] |= nuc_sub
+
+    nucleus_mask = morphology.opening(nucleus_mask, morphology.disk(1))
+    nucleus_mask = morphology.remove_small_objects(nucleus_mask, min_size=params.min_nucleus_area)
+    return nucleus_mask
+
+
+def segment_and_analyze(
+        image: np.ndarray, params: Optional[AnalysisParams] = None, quadrant_name: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Main entry point. Runs the full pipeline and returns metrics + visualizations.
+    Supports optional quadrant scoping (NW, NE, SW, SE) for localized TEM analysis.
+
+    Returns dict with keys:
+        cells: list of per-cell feature dictionaries
+        cell_mask, nucleus_mask: boolean arrays
+        overlay: RGB visualization with colored boundaries
+        summary: aggregate statistics
+        params_used: the AnalysisParams that were applied
+        quadrant: active quadrant tag if applicable
+    """
+    if params is None:
+        params = AnalysisParams()
+
+    # --- Preprocessing ---
+    gray = _to_grayscale(image)
+    gray, was_inverted = _maybe_invert(gray)
+    gray = exposure.rescale_intensity(gray, in_range="image", out_range=(0.0, 1.0))
+
+    # --- Cell segmentation ---
+    cell_mask = _segment_cells(gray, params)
+    labeled_cells = measure.label(cell_mask)
+
+    # --- Nucleus segmentation ---
+    nucleus_mask = _segment_nuclei_inside_cells(gray, cell_mask, labeled_cells, params)
+    labeled_nuclei = measure.label(nucleus_mask)
+
+    # --- Feature extraction using regionprops ---
+    cell_regions = measure.regionprops(labeled_cells, intensity_image=gray)
+    nucleus_regions = measure.regionprops(labeled_nuclei)
+    nucleus_props_by_label = {nr.label: nr for nr in nucleus_regions}
+
+    cells: List[Dict[str, Any]] = []
+
+    for creg in cell_regions:
+        if creg.area < params.min_cell_area:
+            continue
+
+        cell_area = float(creg.area)
+        perimeter = float(creg.perimeter) if creg.perimeter > 0 else 1.0
+        circularity = (4.0 * np.pi * cell_area) / (perimeter * perimeter)
+        eccentricity = float(creg.eccentricity)
+
+        minr, minc, maxr, maxc = creg.bbox
+        cell_bbox_mask = labeled_cells[minr:maxr, minc:maxc] == creg.label
+
+        nucleus_area = 0.0
+        for nl in np.unique(labeled_nuclei[minr:maxr, minc:maxc]):
+            if nl == 0:
+                continue
+            nreg = nucleus_props_by_label.get(nl)
+            if nreg is None:
+                continue
+            cy, cx = nreg.centroid
+            if (minr <= cy < maxr) and (minc <= cx < maxc):
+                local_y = int(cy - minr)
+                local_x = int(cx - minc)
+                if 0 <= local_y < cell_bbox_mask.shape[0] and 0 <= local_x < cell_bbox_mask.shape[1]:
+                    if cell_bbox_mask[local_y, local_x]:
+                        nucleus_area += float(nreg.area)
+
+        cytoplasm_area = max(cell_area - nucleus_area, 1.0)
+        nc_ratio = nucleus_area / cytoplasm_area
+
+        # Vacuolization percentage (internal structure variance)
+        cell_pixels = gray[minr:maxr, minc:maxc][cell_bbox_mask]
+        if len(cell_pixels) > 0:
+            median_val = np.median(cell_pixels)
+            vacuolization_pixels = np.sum(np.abs(cell_pixels - median_val) > 0.15)
+            vacuolization_pct = (vacuolization_pixels / cell_area) * 100.0
+        else:
+            vacuolization_pct = 0.0
+
+        classification, reasons = _classify_morphology(
+            nc_ratio=nc_ratio,
+            circularity=circularity,
+            eccentricity=eccentricity,
+            nucleus_area=nucleus_area,
+            cell_area=cell_area,
+            params=params,
         )
 
-    # ====================== DATA TABLE ======================
-    st.subheader("Extracted Metrics per Cell")
+        cells.append(
+            {
+                "cell_id": int(creg.label),
+                "cell_area": round(cell_area, 1),
+                "nucleus_area": round(nucleus_area, 1),
+                "cytoplasm_area": round(cytoplasm_area, 1),
+                "nc_ratio": round(nc_ratio, 3),
+                "perimeter": round(perimeter, 1),
+                "circularity": round(circularity, 3),
+                "eccentricity": round(eccentricity, 3),
+                "vacuolization_pct": round(vacuolization_pct, 1),
+                "bbox": (minr, minc, maxr, maxc),
+                "classification": classification,
+                "reasons": reasons,
+            }
+        )
+
+    cells = sorted(cells, key=lambda c: (c["bbox"][0], c["bbox"][1]))
+    for idx, c in enumerate(cells, start=1):
+        c["cell_id"] = idx
+
+    overlay = _create_overlay(image, cell_mask, nucleus_mask)
 
     if cells:
-        df = pd.DataFrame(cells)
+        nc_values = np.array([c["nc_ratio"] for c in cells])
+        abnormal_count = sum(1 for c in cells if "Abnormal" in c["classification"])
+        summary = {
+            "num_cells": len(cells),
+            "num_abnormal": abnormal_count,
+            "abnormal_pct": round(100.0 * abnormal_count / len(cells), 1),
+            "mean_nc_ratio": round(float(nc_values.mean()), 3),
+            "median_nc_ratio": round(float(np.median(nc_values)), 3),
+            "max_nc_ratio": round(float(nc_values.max()), 3),
+            "image_inverted": was_inverted,
+            "quadrant": quadrant_name,
+        }
+    else:
+        summary = {
+            "num_cells": 0,
+            "num_abnormal": 0,
+            "abnormal_pct": 0.0,
+            "mean_nc_ratio": 0.0,
+            "median_nc_ratio": 0.0,
+            "max_nc_ratio": 0.0,
+            "image_inverted": was_inverted,
+            "quadrant": quadrant_name,
+        }
 
-        display_df = df[
-            [
-                "cell_id",
-                "cell_area",
-                "nucleus_area",
-                "cytoplasm_area",
-                "nc_ratio",
-                "vacuolization_pct",
-                "perimeter",
-                "circularity",
-                "eccentricity",
-                "classification",
-            ]
-        ].copy()
-
-        # Insert physical area and current quadrant source columns
-        display_df.insert(2, "cell_area_um2", display_df["cell_area"] / (px_per_um ** 2))
-        display_df.insert(1, "Quadrant", quad_choice)
-
-        display_df.columns = [
-            "Cell ID",
-            "Quadrant",
-            "Area (px)",
-            "Area (µm²)",
-            "Nucleus Area",
-            "Cytoplasm Area",
-            "N/C Ratio",
-            "Vacuolization %",
-            "Perimeter",
-            "Circularity",
-            "Eccentricity",
-            "Classification",
-        ]
+    return {
+        "cells": cells,
+        "cell_mask": cell_mask,
+        "nucleus_mask": nucleus_mask,
+        "overlay": overlay,
+        "summary": summary,
+        "params_used": params,
+    }
 
 
-        def color_class(val: str):
-            if "Abnormal" in val:
-                return "background-color: #ffcccc; font-weight: 600"
-            elif "Borderline" in val:
-                return "background-color: #fff3cd; font-weight: 500"
-            return "background-color: #d4edda"
+# ----------------------------- Classification --------------------------------
+def _classify_morphology(
+        nc_ratio: float,
+        circularity: float,
+        eccentricity: float,
+        nucleus_area: float,
+        cell_area: float,
+        params: AnalysisParams,
+) -> Tuple[str, List[str]]:
+    """
+    Lightweight, transparent rule-based classifier.
+    Returns (label, list_of_triggered_reasons).
+    """
+    reasons: List[str] = []
+
+    if nc_ratio >= params.nc_ratio_very_high:
+        reasons.append("very high N/C ratio")
+    elif nc_ratio >= params.nc_ratio_abnormal:
+        reasons.append("elevated N/C ratio")
+
+    if eccentricity >= params.eccentricity_abnormal:
+        reasons.append("high eccentricity (elongated/irregular)")
+
+    if circularity <= params.circularity_abnormal:
+        reasons.append("low circularity (atypical shape)")
+
+    if nucleus_area >= params.nucleus_area_large:
+        reasons.append("enlarged nucleus")
+
+    if len(reasons) >= 2 or nc_ratio >= params.nc_ratio_very_high:
+        return "Abnormal (malignant-like)", reasons
+    elif reasons:
+        return "Borderline", reasons
+    else:
+        return "Normal morphology", []
 
 
-        styled = display_df.style.map(color_class, subset=["Classification"])
-        st.dataframe(styled, use_container_width=True, hide_index=True, height=320)
+# ----------------------------- Visualization ---------------------------------
+def _create_overlay(
+        image: np.ndarray, cell_mask: np.ndarray, nucleus_mask: np.ndarray
+) -> np.ndarray:
+    """Create a color overlay with cell (teal) and nucleus (magenta) boundaries."""
+    overlay = image.copy()
+    if overlay.dtype != np.uint8:
+        overlay = (np.clip(overlay, 0, 1) * 255).astype(np.uint8)
 
-        csv_buffer = io.StringIO()
-        display_df.to_csv(csv_buffer, index=False)
-        st.download_button(
-            label="⬇️ Download metrics as CSV",
-            data=csv_buffer.getvalue(),
-            file_name=f"cell_metrics_{quad_choice.replace(' ', '_')}.csv",
-            mime="text/csv",
+    cell_u8 = (cell_mask.astype(np.uint8) * 255)
+    nuc_u8 = (nucleus_mask.astype(np.uint8) * 255)
+
+    cell_contours, _ = cv2.findContours(cell_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    nuc_contours, _ = cv2.findContours(nuc_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    cv2.drawContours(overlay, cell_contours, -1, (0, 188, 212), 2)
+    cv2.drawContours(overlay, nuc_contours, -1, (233, 30, 99), 2)
+
+    nuc_color = np.array([233, 30, 99], dtype=np.uint8)
+    overlay[nucleus_mask] = (0.55 * overlay[nucleus_mask] + 0.45 * nuc_color).astype(np.uint8)
+
+    return overlay
+
+
+# ----------------------------- Synthetic Data Generator ----------------------
+def generate_synthetic_cell_image(
+        width: int = 640,
+        height: int = 480,
+        n_healthy: int = 6,
+        n_abnormal: int = 4,
+        seed: int = 123,
+) -> np.ndarray:
+    """
+    Generate a realistic-looking synthetic RGB image containing a mixture of
+    healthy and abnormal/malignant-like cells.
+    """
+    rng = np.random.default_rng(seed)
+    img = np.full((height, width, 3), 248, dtype=np.uint8)
+
+    def draw_cell(
+            cy: float,
+            cx: float,
+            ry: float,
+            rx: float,
+            angle_deg: float,
+            cyto_color: Tuple[int, int, int],
+            nucleus_ry: float,
+            nucleus_rx: float,
+            nucleus_color: Tuple[int, int, int],
+    ):
+        rr, cc = draw.ellipse(int(cy), int(cx), int(ry), int(rx), rotation=np.deg2rad(angle_deg), shape=img.shape[:2])
+        for i in range(3):
+            img[rr, cc, i] = np.clip(
+                cyto_color[i] + rng.integers(-12, 13, size=len(rr)), 0, 255
+            )
+
+        n_cy = cy + rng.uniform(-ry * 0.08, ry * 0.08)
+        n_cx = cx + rng.uniform(-rx * 0.08, rx * 0.08)
+        n_ry = max(3, nucleus_ry)
+        n_rx = max(3, nucleus_rx)
+        rr_n, cc_n = draw.ellipse(int(n_cy), int(n_cx), int(n_ry), int(n_rx), rotation=np.deg2rad(angle_deg),
+                                   shape=img.shape[:2])
+        for i in range(3):
+            img[rr_n, cc_n, i] = np.clip(
+                nucleus_color[i] + rng.integers(-8, 9, size=len(rr_n)), 0, 255
+            )
+
+    for _ in range(n_healthy):
+        cy, cx = rng.uniform(40, height - 40), rng.uniform(40, width - 40)
+        ry, rx = rng.uniform(15, 25), rng.uniform(15, 25)
+        draw_cell(
+            cy, cx, ry, rx, rng.uniform(0, 360), (180, 190, 220),
+            ry * rng.uniform(0.3, 0.45), rx * rng.uniform(0.3, 0.45), (80, 70, 130)
         )
 
-        # ====================== CUSTOM GROUP ANALYSIS ======================
-        st.markdown("---")
-        st.subheader("🧮 Custom Group Analysis")
-        st.markdown(
-            "Select multiple platelets to calculate their combined aggregate vacuolization and view their exact physical size range.")
+    for _ in range(n_abnormal):
+        cy, cx = rng.uniform(50, height - 50), rng.uniform(50, width - 50)
+        ry, rx = rng.uniform(25, 40), rng.uniform(12, 20)
+        draw_cell(
+            cy, cx, ry, rx, rng.uniform(0, 360), (160, 170, 200),
+            ry * rng.uniform(0.7, 0.9), rx * rng.uniform(0.7, 0.9), (60, 40, 100)
+        )
 
-        cell_ids = [c["cell_id"] for c in cells]
-        selected_group = st.multiselect("Select Platelets (Cell IDs) from current quadrant:", options=cell_ids)
+    img_float = img.astype(np.float32) / 255.0
+    img_float = filters.gaussian(img_float, sigma=0.8, channel_axis=-1)
+    img_float = util.random_noise(img_float, mode="gaussian", var=0.001, rng=rng)
 
-        if selected_group:
-            group_cells = [c for c in cells if c["cell_id"] in selected_group]
-
-            # Reconstruct aggregate vacuolization: (Sum of vacuole area) / (Sum of cell area)
-            total_area_px = sum(c["cell_area"] for c in group_cells)
-            total_vac_area_px = sum((c["vacuolization_pct"] / 100.0) * c["cell_area"] for c in group_cells)
-            agg_vac_pct = (total_vac_area_px / total_area_px * 100.0) if total_area_px > 0 else 0.0
-
-            # Calculate Size Range in physical units (µm²)
-            physical_areas = [c["cell_area"] / (px_per_um ** 2) for c in group_cells]
-            min_size = min(physical_areas)
-            max_size = max(physical_areas)
-
-            ag1, ag2, ag3 = st.columns(3)
-            ag1.metric("Selected Platelets", len(selected_group))
-            ag2.metric("Aggregate Vacuolization", f"{agg_vac_pct:.1f}%")
-            ag3.metric("Size Range (µm²)", f"{min_size:.2f} - {max_size:.2f}")
-
-        # ====================== SINGLE PLATELET ZOOM & ANALYZE ======================
-        st.markdown("---")
-        st.subheader("🔍 Single Platelet Inspection")
-
-        if cells:
-            selected_id = st.selectbox("Select Platelet (Cell ID) to Zoom", options=cell_ids)
-
-            selected_cell = next(c for c in cells if c["cell_id"] == selected_id)
-            minr, minc, maxr, maxc = selected_cell["bbox"]
-
-            pad = 15
-            minr_p = max(0, minr - pad)
-            minc_p = max(0, minc - pad)
-            maxr_p = min(working_image.shape[0], maxr + pad)
-            maxc_p = min(working_image.shape[1], maxc + pad)
-
-            zoom_img = working_image[minr_p:maxr_p, minc_p:maxc_p]
-            zoom_overlay = labeled_overlay[minr_p:maxr_p, minc_p:maxc_p]
-
-            z_col1, z_col2, z_col3 = st.columns([1.5, 1.5, 1])
-
-            with z_col1:
-                st.markdown(f"**Zoomed Platelet (ID: {selected_id})**")
-                st.image(zoom_img, width="stretch", clamp=True)
-
-            with z_col2:
-                st.markdown("**Segmented Overlay**")
-                st.image(zoom_overlay, width="stretch", clamp=True)
-
-            with z_col3:
-                st.markdown("**Specific Metrics**")
-                st.metric("Vacuolization", f"{selected_cell['vacuolization_pct']}%")
-
-                # Show both pixel area and physical area side-by-side
-                physical_area = selected_cell['cell_area'] / (px_per_um ** 2)
-                st.metric("Total Area (µm²)", f"{physical_area:.2f}", help=f"{selected_cell['cell_area']} pixels")
-
-                st.metric("Circularity", f"{selected_cell['circularity']}")
-
-        # ====================== CHARTS ======================
-        st.markdown("---")
-        st.subheader("Interactive Feature Charts")
-
-        chart_col1, chart_col2 = st.columns(2, gap="large")
-
-        with chart_col1:
-            st.markdown("**N/C Ratio Distribution**")
-            fig1, ax1 = plt.subplots(figsize=(6, 3.8))
-            nc_vals = df["nc_ratio"].values
-
-            ax1.hist(nc_vals, bins=np.linspace(0, max(1.0, nc_vals.max() + 0.05), 18),
-                     color="#3498db", edgecolor="white", alpha=0.85)
-            ax1.axvline(nc_abnormal, color="#e74c3c", linestyle="--", lw=2, label=f"Abnormal ≥ {nc_abnormal}")
-            ax1.axvline(nc_very_high, color="#c0392b", linestyle=":", lw=2, label=f"Very high ≥ {nc_very_high}")
-            ax1.set_xlabel("Nucleus-to-Cytoplasm Ratio")
-            ax1.set_ylabel("Number of cells")
-            ax1.legend(loc="upper right", fontsize=8)
-            ax1.grid(True, alpha=0.3)
-            fig_to_st(fig1)
-
-        with chart_col2:
-            st.markdown("**N/C Ratio vs Eccentricity**")
-            fig2, ax2 = plt.subplots(figsize=(6, 3.8))
-
-            colors = {"Normal morphology": "#2ecc71", "Borderline": "#f1c40f", "Abnormal (malignant-like)": "#e74c3c"}
-
-            for cls, grp in df.groupby("classification"):
-                ax2.scatter(
-                    grp["eccentricity"],
-                    grp["nc_ratio"],
-                    s=70,
-                    c=colors.get(cls, "#7f8c8d"),
-                    alpha=0.85,
-                    edgecolors="white",
-                    linewidths=0.6,
-                    label=cls,
-                )
-
-            ax2.axhline(nc_abnormal, color="#e74c3c", linestyle="--", alpha=0.5, lw=1.2)
-            ax2.set_xlabel("Eccentricity (0 = round, 1 = elongated)")
-            ax2.set_ylabel("N/C Ratio")
-            ax2.set_xlim(-0.02, 1.02)
-            ax2.legend(loc="upper left", fontsize=8, framealpha=0.95)
-            ax2.grid(True, alpha=0.3)
-            fig_to_st(fig2)
-
-    else:
-        st.warning(
-            f"No cells were detected in the {quad_choice} region. Try adjusting parameters or selecting a different quadrant.")
-
-else:
-    st.markdown("---")
-    st.markdown("Upload an image to begin quadrant targeting and analysis.")
+    return (np.clip(img_float, 0, 1) * 255).astype(np.uint8)
