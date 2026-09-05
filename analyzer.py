@@ -471,7 +471,7 @@ def generate_synthetic_cell_image(
         n_ry = max(3, nucleus_ry)
         n_rx = max(3, nucleus_rx)
         rr_n, cc_n = draw.ellipse(int(n_cy), int(n_cx), int(n_ry), int(n_rx), rotation=np.deg2rad(angle_deg),
-                                  shape=img.shape[:2])
+                                   shape=img.shape[:2])
         for i in range(3):
             img[rr_n, cc_n, i] = np.clip(
                 nucleus_color[i] + rng.integers(-8, 9, size=len(rr_n)), 0, 255
