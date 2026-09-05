@@ -112,10 +112,10 @@ st.sidebar.header("Analysis Parameters")
 
 min_cell_area = st.sidebar.slider(
     "Minimum cell area (pixels)",
-    min_value=1000,
-    max_value=30000,
-    value=10000,
-    step=1000,
+    min_value=100,      # Lowered to capture smaller phantom cells
+    max_value=600000,   # Increased to support massive TEM structures
+    value=500,          # Lowered default so phantom demo works automatically
+    step=100,
     help="Discard objects smaller than this (removes debris and fragments).",
 )
 
