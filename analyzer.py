@@ -118,20 +118,22 @@ def _to_grayscale(img: np.ndarray) -> np.ndarray:
 
 def _maybe_invert(gray: np.ndarray) -> Tuple[np.ndarray, bool]:
     """
-    Heuristic: if the "dark" objects (putative cells/nuclei) occupy the
-    brighter part of the histogram, invert the image. This makes the
-    pipeline robust to both fluorescence (bright objects) and brightfield/TEM.
+    Heuristic: if the image is fluorescence (dark background, bright cells),
+    invert it so cells appear dark on a bright background for consistent watershed segmentation.
     """
     p1, p2 = np.percentile(gray, [2, 98])
     if p2 - p1 < 0.05:
         return gray, False
 
     t = filters.threshold_otsu(gray)
+    # Check true background dominance: true dark background has mean intensity near 0
+    bg_is_dark = np.median(gray) < 0.35
     dark_fraction = (gray < t).mean()
-
     bright_fraction = (gray > t).mean()
-    if bright_fraction > 0.35 and dark_fraction < 0.25:
+
+    if bg_is_dark and bright_fraction > 0.35 and dark_fraction < 0.40:
         return 1.0 - gray, True
+        
     return gray, False
 
 
@@ -158,10 +160,10 @@ def _segment_cells(gray: np.ndarray, params: AnalysisParams) -> np.ndarray:
     blurred = filters.gaussian(gray, sigma=params.cell_gaussian_sigma)
     thresh = filters.threshold_otsu(blurred)
 
-    # Initial binary mask
+    # Initial binary mask (cells are darker than background)
     mask = blurred < thresh
 
-    # Morphological cleanup (uses updated min_cell_area to drop debris)
+    # Morphological cleanup
     mask = morphology.remove_small_objects(mask, min_size=params.min_cell_area // 2)
     mask = morphology.remove_small_holes(mask, area_threshold=200)
     mask = morphology.closing(mask, morphology.disk(2))
