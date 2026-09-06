@@ -52,7 +52,7 @@ ImageLike = Union[str, bytes, io.BytesIO, np.ndarray, PILImage.Image]
 @dataclass
 class AnalysisParams:
     """Tunable parameters for segmentation and classification."""
-    min_cell_area: int = 10000  # pixels — adjusted in sidebar for specific image resolutions
+    min_cell_area: int = 10000  # pixels — drastically increased to ignore TEM debris
     min_nucleus_area: int = 150  # pixels — increased to avoid tiny noise granules
     nucleus_dark_percentile: float = 26.0  # inside each cell, take darkest X%
     cell_gaussian_sigma: float = 1.2
@@ -118,8 +118,9 @@ def _to_grayscale(img: np.ndarray) -> np.ndarray:
 
 def _maybe_invert(gray: np.ndarray) -> Tuple[np.ndarray, bool]:
     """
-    Heuristic: if the image is fluorescence (dark background, bright cells),
-    invert it so cells appear dark on a bright background for consistent watershed segmentation.
+    Heuristic: if the "dark" objects (putative cells/nuclei) occupy the
+    brighter part of the histogram, invert the image. This makes the
+    pipeline robust to both fluorescence (bright objects) and brightfield/TEM.
     """
     p1, p2 = np.percentile(gray, [2, 98])
     if p2 - p1 < 0.05:
@@ -127,12 +128,10 @@ def _maybe_invert(gray: np.ndarray) -> Tuple[np.ndarray, bool]:
 
     t = filters.threshold_otsu(gray)
     dark_fraction = (gray < t).mean()
-    bright_fraction = (gray > t).mean()
 
-    # Invert ONLY if the image background is predominantly dark (Fluorescence microscopy)
-    if dark_fraction > 0.35 and bright_fraction < 0.25:
+    bright_fraction = (gray > t).mean()
+    if bright_fraction > 0.35 and dark_fraction < 0.25:
         return 1.0 - gray, True
-        
     return gray, False
 
 
@@ -162,7 +161,7 @@ def _segment_cells(gray: np.ndarray, params: AnalysisParams) -> np.ndarray:
     # Initial binary mask
     mask = blurred < thresh
 
-    # Morphological cleanup
+    # Morphological cleanup (uses updated min_cell_area to drop debris)
     mask = morphology.remove_small_objects(mask, min_size=params.min_cell_area // 2)
     mask = morphology.remove_small_holes(mask, area_threshold=200)
     mask = morphology.closing(mask, morphology.disk(2))
@@ -424,15 +423,15 @@ def _create_overlay(
 
 # ----------------------------- Synthetic Data Generator ----------------------
 def generate_synthetic_cell_image(
-        width: int = 640,
-        height: int = 480,
-        n_healthy: int = 6,
-        n_abnormal: int = 4,
+        width: int = 1024,
+        height: int = 768,
+        n_healthy: int = 5,
+        n_abnormal: int = 3,
         seed: int = 123,
 ) -> np.ndarray:
     """
     Generate a realistic-looking synthetic RGB image containing a mixture of
-    healthy and abnormal/malignant-like cells.
+    healthy and abnormal/malignant-like cells scaled to pass min_cell_area >= 10000.
     """
     rng = np.random.default_rng(seed)
     img = np.full((height, width, 3), 248, dtype=np.uint8)
@@ -456,8 +455,8 @@ def generate_synthetic_cell_image(
 
         n_cy = cy + rng.uniform(-ry * 0.08, ry * 0.08)
         n_cx = cx + rng.uniform(-rx * 0.08, rx * 0.08)
-        n_ry = max(3, nucleus_ry)
-        n_rx = max(3, nucleus_rx)
+        n_ry = max(5, nucleus_ry)
+        n_rx = max(5, nucleus_rx)
         rr_n, cc_n = draw.ellipse(int(n_cy), int(n_cx), int(n_ry), int(n_rx), rotation=np.deg2rad(angle_deg),
                                    shape=img.shape[:2])
         for i in range(3):
@@ -466,16 +465,16 @@ def generate_synthetic_cell_image(
             )
 
     for _ in range(n_healthy):
-        cy, cx = rng.uniform(40, height - 40), rng.uniform(40, width - 40)
-        ry, rx = rng.uniform(15, 25), rng.uniform(15, 25)
+        cy, cx = rng.uniform(90, height - 90), rng.uniform(90, width - 90)
+        ry, rx = rng.uniform(58, 75), rng.uniform(58, 75)
         draw_cell(
             cy, cx, ry, rx, rng.uniform(0, 360), (180, 190, 220),
             ry * rng.uniform(0.3, 0.45), rx * rng.uniform(0.3, 0.45), (80, 70, 130)
         )
 
     for _ in range(n_abnormal):
-        cy, cx = rng.uniform(50, height - 50), rng.uniform(50, width - 50)
-        ry, rx = rng.uniform(25, 40), rng.uniform(12, 20)
+        cy, cx = rng.uniform(100, height - 100), rng.uniform(100, width - 100)
+        ry, rx = rng.uniform(75, 95), rng.uniform(45, 65)
         draw_cell(
             cy, cx, ry, rx, rng.uniform(0, 360), (160, 170, 200),
             ry * rng.uniform(0.7, 0.9), rx * rng.uniform(0.7, 0.9), (60, 40, 100)
