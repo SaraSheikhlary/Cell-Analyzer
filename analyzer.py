@@ -52,7 +52,7 @@ ImageLike = Union[str, bytes, io.BytesIO, np.ndarray, PILImage.Image]
 @dataclass
 class AnalysisParams:
     """Tunable parameters for segmentation and classification."""
-    min_cell_area: int = 10000  # pixels — drastically increased to ignore TEM debris
+    min_cell_area: int = 10000  # pixels — adjusted in sidebar for specific image resolutions
     min_nucleus_area: int = 150  # pixels — increased to avoid tiny noise granules
     nucleus_dark_percentile: float = 26.0  # inside each cell, take darkest X%
     cell_gaussian_sigma: float = 1.2
@@ -118,9 +118,8 @@ def _to_grayscale(img: np.ndarray) -> np.ndarray:
 
 def _maybe_invert(gray: np.ndarray) -> Tuple[np.ndarray, bool]:
     """
-    Heuristic: if the "dark" objects (putative cells/nuclei) occupy the
-    brighter part of the histogram, invert the image. This makes the
-    pipeline robust to both fluorescence (bright objects) and brightfield/TEM.
+    Heuristic: if the image is fluorescence (dark background, bright cells),
+    invert it so cells appear dark on a bright background for consistent watershed segmentation.
     """
     p1, p2 = np.percentile(gray, [2, 98])
     if p2 - p1 < 0.05:
@@ -128,10 +127,12 @@ def _maybe_invert(gray: np.ndarray) -> Tuple[np.ndarray, bool]:
 
     t = filters.threshold_otsu(gray)
     dark_fraction = (gray < t).mean()
-
     bright_fraction = (gray > t).mean()
-    if bright_fraction > 0.35 and dark_fraction < 0.25:
+
+    # Invert ONLY if the image background is predominantly dark (Fluorescence microscopy)
+    if dark_fraction > 0.35 and bright_fraction < 0.25:
         return 1.0 - gray, True
+        
     return gray, False
 
 
@@ -161,7 +162,7 @@ def _segment_cells(gray: np.ndarray, params: AnalysisParams) -> np.ndarray:
     # Initial binary mask
     mask = blurred < thresh
 
-    # Morphological cleanup (uses updated min_cell_area to drop debris)
+    # Morphological cleanup
     mask = morphology.remove_small_objects(mask, min_size=params.min_cell_area // 2)
     mask = morphology.remove_small_holes(mask, area_threshold=200)
     mask = morphology.closing(mask, morphology.disk(2))
